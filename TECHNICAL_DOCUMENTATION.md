@@ -21,6 +21,7 @@
 10. [Deployment Guide](#10-deployment-guide)
 11. [Monitoring and Logging](#11-monitoring-and-logging)
 12. [Development Guidelines](#12-development-guidelines)
+13. [Known Gaps](#13-known-gaps)
 
 ---
 
@@ -156,11 +157,12 @@ com.sotatek.order/
 │
 ├── controller/                              # Presentation Layer
 │   ├── OrderController.java                # REST endpoints
-│   └── dto/                                 # Data Transfer Objects
-│       ├── CreateOrderRequest.java         # Request DTO for order creation
-│       ├── UpdateOrderRequest.java         # Request DTO for order updates
+│   ├── request/                            # Request DTOs
+│   │   ├── CreateOrderRequest.java         # Request DTO for order creation
+│   │   ├── UpdateOrderRequest.java         # Request DTO for order updates
+│   │   └── OrderItemRequest.java           # Request DTO for order items
+│   └── response/                           # Response DTOs
 │       ├── OrderResponse.java              # Response DTO for order data
-│       ├── OrderItemRequest.java           # Request DTO for order items
 │       ├── OrderItemResponse.java          # Response DTO for order items
 │       ├── PageResponse.java               # Generic pagination response
 │       └── ErrorResponse.java              # Error response format
@@ -170,9 +172,16 @@ com.sotatek.order/
 │   ├── impl/
 │   │   └── OrderServiceImpl.java           # Core order orchestration
 │   └── external/                           # External service integration
-│       ├── MemberServiceClient.java        # Member API client
-│       ├── ProductServiceClient.java       # Product API client
-│       ├── PaymentServiceClient.java       # Payment API client
+│       ├── MemberServiceClient.java        # Member API client interface
+│       ├── ProductServiceClient.java       # Product API client interface
+│       ├── PaymentServiceClient.java       # Payment API client interface
+│       ├── adapter/                        # Client implementations (Adapter Pattern)
+│       │   ├── MockMemberServiceClient.java     # Mock implementation
+│       │   ├── RestMemberServiceClient.java     # REST implementation
+│       │   ├── MockProductServiceClient.java    # Mock implementation
+│       │   ├── RestProductServiceClient.java    # REST implementation
+│       │   ├── MockPaymentServiceClient.java    # Mock implementation
+│       │   └── RestPaymentServiceClient.java    # REST implementation
 │       └── dto/                            # External service DTOs
 │           ├── MemberDto.java
 │           ├── ProductDto.java
@@ -201,9 +210,7 @@ com.sotatek.order/
 │   └── GlobalExceptionHandler.java         # Centralized error handling
 │
 └── config/                                  # Configuration
-    ├── RestTemplateConfig.java             # HTTP client configuration
-    ├── ResilienceConfig.java               # Circuit Breaker & Retry config
-    └── OpenApiConfig.java                  # Swagger/OpenAPI configuration
+    └── RestClientConfig.java               # HTTP client configuration with timeouts
 ```
 
 ### 2.3 Design Patterns
@@ -227,13 +234,22 @@ com.sotatek.order/
    - Separates internal domain models from external API contracts
    - Prevents over-exposure of internal data structures
 
-5. **Circuit Breaker Pattern**
-   - Prevents cascading failures from external service failures
-   - Provides fallback mechanisms
+5. **Adapter Pattern** (External Services)
+   - Interface-based design for external service clients
+   - Multiple implementations: Mock and REST
+   - Runtime selection via `@ConditionalOnProperty(name = "external.mock.enabled")`
+   - Enables easy switching between mock and real services without code changes
+   - Mock adapters for development/testing, REST adapters for production
 
-6. **Retry Pattern**
+6. **Circuit Breaker Pattern**
+   - Prevents cascading failures from external service failures
+   - Applied to all external service REST client methods
+   - Configuration per service (memberService, productService, paymentService)
+
+7. **Retry Pattern**
    - Handles transient failures in external service calls
    - Exponential backoff to prevent overwhelming failing services
+   - Applied alongside Circuit Breaker for comprehensive resilience
 
 ---
 
@@ -377,21 +393,25 @@ dependencies {
 
 ```java
 public enum OrderStatus {
-    PENDING,         // Order created, validation in progress
-    CONFIRMED,       // Validation passed, ready for payment
-    PAID,            // Payment successful
-    COMPLETED,       // Order fulfilled (future state)
-    CANCELLED,       // Order cancelled by user
-    PAYMENT_FAILED   // Payment processing failed
+    PENDING,         // Order created, before payment
+    CONFIRMED,       // Payment completed, order confirmed
+    CANCELLED        // Order cancelled by user
 }
 ```
 
 **State Transition Rules:**
 ```
-PENDING ──────→ CONFIRMED ──────→ PAID ──────→ COMPLETED
-   │                │
-   └→ CANCELLED     └→ PAYMENT_FAILED
+PENDING ──────→ CONFIRMED ──────→ CANCELLED
+   │                                  ↑
+   └──────────────────────────────────┘
 ```
+
+**Business Rules:**
+- Orders start as PENDING (before payment)
+- Successful payment moves order to CONFIRMED
+- Only CONFIRMED orders can be cancelled to CANCELLED
+- CANCELLED is a terminal state (no further transitions)
+- Payment failures leave order in PENDING status for retry
 
 **PaymentMethod Enum:**
 
@@ -464,18 +484,31 @@ public class Order {
         item.setOrder(this);
     }
 
+    public void clearItems() {
+        items.clear();
+    }
+
     public void calculateTotalAmount() {
         this.totalAmount = items.stream()
             .map(OrderItem::getSubtotal)
             .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
-    public boolean canBeUpdated() {
+    public boolean canUpdateItems() {
         return status == OrderStatus.PENDING;
     }
 
     public boolean canBeCancelled() {
-        return status == OrderStatus.PENDING || status == OrderStatus.CONFIRMED;
+        return status == OrderStatus.CONFIRMED;
+    }
+
+    public boolean canTransitionTo(OrderStatus newStatus) {
+        if (status == newStatus) return true;
+        return switch (status) {
+            case PENDING -> newStatus == OrderStatus.CONFIRMED;
+            case CONFIRMED -> newStatus == OrderStatus.CANCELLED;
+            case CANCELLED -> false; // Terminal state
+        };
     }
 }
 ```
@@ -528,6 +561,42 @@ Content-Type: application/json
 - `items[].quantity`: required, min 1, max 10000
 - `paymentMethod`: required, enum {CREDIT_CARD, DEBIT_CARD, BANK_TRANSFER}
 
+**Processing Flow (4-Step Validation Chain):**
+
+1. **Member Validation**
+   - Call `memberServiceClient.getMember(memberId)`
+   - Verify member exists (throws `MemberNotFoundException` if not found)
+   - Verify member status is "ACTIVE" (throws `MemberValidationException` if not)
+   - Extract member name for order record
+
+2. **Product Validation & Stock Checking**
+   - For each item in the order:
+     - Call `productServiceClient.getProduct(productId)`
+     - Verify product exists (throws `ProductNotFoundException` if not found)
+     - Verify product status is "AVAILABLE" (throws `ProductValidationException` if not)
+     - Call `productServiceClient.getProductStock(productId)`
+     - Verify sufficient stock (throws `InsufficientStockException` if not enough)
+     - Use real product data (name, price) from product service
+   - Calculate item subtotals and order total amount
+
+3. **Order Persistence**
+   - Save order with status = PENDING
+   - Order is committed to database before payment attempt
+   - Transaction boundary: ensures order exists even if payment fails
+
+4. **Payment Processing**
+   - Call `paymentServiceClient.createPayment(paymentRequest)`
+   - If successful:
+     - Update order status to CONFIRMED
+     - Store paymentId and transactionId
+     - Save updated order
+   - If failed:
+     - Order remains PENDING in database
+     - Throw `PaymentFailedException`
+     - User can retry payment later
+
+**Fail-Fast Approach**: Validation stops at first failure, preventing unnecessary external service calls.
+
 **Success Response:**
 ```
 HTTP/1.1 201 Created
@@ -538,7 +607,7 @@ Location: /api/orders/1
   "id": 1,
   "memberId": 1001,
   "memberName": "John Doe",
-  "status": "PAID",
+  "status": "CONFIRMED",
   "items": [
     {
       "id": 1,
@@ -674,12 +743,12 @@ Content-Type: application/json
 - `page` (optional): Page number, 0-indexed (default: 0)
 - `size` (optional): Page size (default: 10, max: 100)
 - `memberId` (optional): Filter by member ID
-- `status` (optional): Filter by status {PENDING, CONFIRMED, PAID, COMPLETED, CANCELLED, PAYMENT_FAILED}
+- `status` (optional): Filter by status {PENDING, CONFIRMED, CANCELLED}
 - `sort` (optional): Sort field and direction, e.g., "createdAt,desc" (default: "createdAt,desc")
 
 **Example Request:**
 ```
-GET /api/orders?page=0&size=10&memberId=1001&status=PAID&sort=createdAt,desc
+GET /api/orders?page=0&size=10&memberId=1001&status=CONFIRMED&sort=createdAt,desc
 ```
 
 **Success Response:**
@@ -693,7 +762,7 @@ Content-Type: application/json
       "id": 1,
       "memberId": 1001,
       "memberName": "John Doe",
-      "status": "PAID",
+      "status": "CONFIRMED",
       "totalAmount": 69.97,
       "paymentMethod": "CREDIT_CARD",
       "createdAt": "2026-01-12T14:30:00Z",
@@ -703,7 +772,7 @@ Content-Type: application/json
       "id": 2,
       "memberId": 1001,
       "memberName": "John Doe",
-      "status": "PAID",
+      "status": "CONFIRMED",
       "totalAmount": 149.99,
       "paymentMethod": "DEBIT_CARD",
       "createdAt": "2026-01-11T10:15:00Z",
@@ -723,7 +792,9 @@ Content-Type: application/json
 
 **Endpoint:** `PUT /api/orders/{id}`
 
-**Description:** Updates an existing order. Only PENDING orders can be updated.
+**Description:** Updates an existing order.
+- **Item updates**: Only PENDING orders can update items
+- **Status changes**: Can transition CONFIRMED orders to CANCELLED
 
 **Path Parameters:**
 - `id` (required): Order ID (integer)
@@ -737,9 +808,15 @@ Content-Type: application/json
       "quantity": 3
     }
   ],
-  "paymentMethod": "DEBIT_CARD"
+  "paymentMethod": "DEBIT_CARD",
+  "status": "CANCELLED"
 }
 ```
+
+**Notes:**
+- `items` field is optional - only provide to update order items (PENDING orders only)
+- `paymentMethod` field is optional - only provide to change payment method
+- `status` field is optional - provide to cancel a CONFIRMED order (value: "CANCELLED")
 
 **Success Response:**
 ```
@@ -770,10 +847,17 @@ Content-Type: application/json
 
 **Error Responses:**
 ```json
-// 400 Bad Request - Invalid Status
+// 400 Bad Request - Invalid Item Update
 {
   "code": "INVALID_ORDER_STATUS",
-  "message": "Cannot update order with status: PAID. Only PENDING orders can be updated.",
+  "message": "Cannot update order items with status: CONFIRMED. Only PENDING orders can update items.",
+  "timestamp": "2026-01-12T15:45:00Z"
+}
+
+// 400 Bad Request - Invalid Status Transition
+{
+  "code": "INVALID_ORDER_STATUS",
+  "message": "Cannot change order status from PENDING to CANCELLED",
   "timestamp": "2026-01-12T15:45:00Z"
 }
 
@@ -782,37 +866,6 @@ Content-Type: application/json
   "code": "ORDER_NOT_FOUND",
   "message": "Order not found: id=1",
   "timestamp": "2026-01-12T15:45:00Z"
-}
-```
-
-#### 5.2.5 Cancel Order
-
-**Endpoint:** `DELETE /api/orders/{id}`
-
-**Description:** Cancels an order by changing its status to CANCELLED. Only PENDING or CONFIRMED orders can be cancelled.
-
-**Path Parameters:**
-- `id` (required): Order ID (integer)
-
-**Success Response:**
-```
-HTTP/1.1 204 No Content
-```
-
-**Error Responses:**
-```json
-// 400 Bad Request - Invalid Status
-{
-  "code": "INVALID_ORDER_STATUS",
-  "message": "Cannot cancel order with status: PAID. Only PENDING or CONFIRMED orders can be cancelled.",
-  "timestamp": "2026-01-12T16:00:00Z"
-}
-
-// 404 Not Found
-{
-  "code": "ORDER_NOT_FOUND",
-  "message": "Order not found: id=1",
-  "timestamp": "2026-01-12T16:00:00Z"
 }
 ```
 
@@ -822,18 +875,59 @@ HTTP/1.1 204 No Content
 |-------------|---------|-------|
 | 200 OK | Success | GET, PUT operations successful |
 | 201 Created | Resource created | POST order created successfully |
-| 204 No Content | Success with no body | DELETE order cancelled |
-| 400 Bad Request | Client error | Validation error, business rule violation |
-| 404 Not Found | Resource not found | Order, Member, or Product not found |
-| 422 Unprocessable Entity | Processing error | Payment failed |
+| 400 Bad Request | Client error | Validation error, business rule violation, invalid status transitions |
+| 404 Not Found | Resource not found | Order, Member, Product, or Payment not found |
+| 422 Unprocessable Entity | Processing error | Payment processing failed |
 | 500 Internal Server Error | Server error | Unexpected server error |
-| 503 Service Unavailable | Service down | External service unavailable |
+| 503 Service Unavailable | Service down | External service unavailable (Circuit Breaker open) |
 
 ---
 
 ## 6. External Service Integration
 
-### 6.1 Member Service
+### 6.1 Adapter Pattern Implementation
+
+**Design Philosophy:**
+The external service integration uses the Adapter Pattern to enable seamless switching between mock and real service implementations without code changes.
+
+**Architecture:**
+```
+Service Client Interface (e.g., MemberServiceClient)
+        │
+        ├──> Mock Implementation (@ConditionalOnProperty mock=true)
+        │    └── MockMemberServiceClient
+        │
+        └──> REST Implementation (@ConditionalOnProperty mock=false)
+             └── RestMemberServiceClient
+```
+
+**Configuration:**
+```yaml
+external:
+  mock:
+    enabled: ${EXTERNAL_MOCK_ENABLED:true}  # true = use mocks, false = use REST clients
+```
+
+**Benefits:**
+- **Development**: Use mocks for fast local development without external dependencies
+- **Testing**: Use mocks in unit/integration tests for deterministic behavior
+- **Production**: Switch to REST clients by setting `EXTERNAL_MOCK_ENABLED=false`
+- **No Code Changes**: Implementation selection happens at startup via Spring's conditional bean loading
+
+**Mock Implementation Features:**
+- Simulates realistic responses with test data
+- Includes special test cases (e.g., memberId=9999 → not found, memberId=8888 → INACTIVE)
+- Thread-safe (e.g., AtomicLong for payment ID generation)
+- Clear [MOCK] logging prefix for easy identification
+
+**REST Implementation Features:**
+- Real HTTP calls using RestTemplate
+- @CircuitBreaker and @Retry annotations for resilience
+- Comprehensive error handling with custom exceptions
+- Proper HTTP status code mapping (404 → NotFoundException, etc.)
+- Configurable timeouts via `rest.connection.timeout` and `rest.connection.read-timeout`
+
+### 6.2 Member Service
 
 **Base URL:** `http://member-service:8081` (configurable)
 
@@ -912,7 +1006,7 @@ GET http://member-service:8081/api/members/1001
 **Integration Point:** Order creation and update validation
 
 **Validation Rules:**
-- Product must exist (404 → `ProductValidationException`)
+- Product must exist (404 → `ProductNotFoundException`)
 - Product status must be "AVAILABLE"
 - availableQuantity must be >= requested quantity → `InsufficientStockException`
 
@@ -1011,6 +1105,9 @@ RuntimeException
     │
     ├─ OrderException (base)
     │   ├─ OrderNotFoundException
+    │   ├─ MemberNotFoundException
+    │   ├─ ProductNotFoundException
+    │   ├─ PaymentNotFoundException
     │   ├─ InvalidOrderStatusException
     │   ├─ MemberValidationException
     │   ├─ ProductValidationException
@@ -1026,6 +1123,9 @@ RuntimeException
 | Exception | HTTP Status | Error Code |
 |-----------|-------------|------------|
 | OrderNotFoundException | 404 Not Found | ORDER_NOT_FOUND |
+| MemberNotFoundException | 404 Not Found | MEMBER_NOT_FOUND |
+| ProductNotFoundException | 404 Not Found | PRODUCT_NOT_FOUND |
+| PaymentNotFoundException | 404 Not Found | PAYMENT_NOT_FOUND |
 | MemberValidationException | 400 Bad Request | MEMBER_VALIDATION_ERROR |
 | ProductValidationException | 400 Bad Request | PRODUCT_VALIDATION_ERROR |
 | InsufficientStockException | 400 Bad Request | INSUFFICIENT_STOCK |
@@ -1352,13 +1452,21 @@ docker-compose logs -f order-service
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| SPRING_DATASOURCE_URL | PostgreSQL JDBC URL | jdbc:postgresql://localhost:5432/orderdb |
+| SPRING_DATASOURCE_URL | PostgreSQL JDBC URL | jdbc:postgresql://localhost:5433/orderdb |
 | SPRING_DATASOURCE_USERNAME | Database username | orderuser |
 | SPRING_DATASOURCE_PASSWORD | Database password | orderpass |
+| EXTERNAL_MOCK_ENABLED | Use mock external services | true |
 | MEMBER_SERVICE_URL | Member Service base URL | http://localhost:8081 |
 | PRODUCT_SERVICE_URL | Product Service base URL | http://localhost:8082 |
 | PAYMENT_SERVICE_URL | Payment Service base URL | http://localhost:8083 |
 | SERVER_PORT | Application port | 8080 |
+
+**RestTemplate Configuration:**
+
+| Property | Description | Default |
+|----------|-------------|---------|
+| rest.connection.timeout | Connection timeout in ms | 5000 |
+| rest.connection.read-timeout | Read timeout in ms | 5000 |
 
 **Profile-Specific Configuration:**
 
@@ -1541,6 +1649,120 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
 - Close resources properly (use try-with-resources)
 - Avoid loading large datasets into memory
 - Use streaming for large responses
+
+---
+
+## 13. Known Limitations and Design Decisions
+
+### 13.1 Known Limitations
+
+**1. Concurrent Stock Management**
+- **Issue**: Race condition exists when multiple orders try to purchase the same product simultaneously
+- **Impact**: Stock checking and order creation are separate operations, allowing potential overselling
+- **Mitigation**: Acknowledged as known limitation; production system would use optimistic locking or distributed locks
+- **Acceptable Risk**: For assessment scope, the risk is documented
+
+**2. Payment Retry Mechanism**
+- **Current Behavior**: Failed payments leave order in PENDING status but no automatic retry
+- **Impact**: Users must manually retry payment
+- **Future Enhancement**: Implement background job for payment retry with exponential backoff
+- **Workaround**: Order remains in PENDING state, allowing manual payment retry via external process
+
+**3. No Physical DELETE**
+- **Design Choice**: Orders are never physically deleted from database
+- **Implementation**: Status changed to CANCELLED for soft delete
+- **Rationale**: Maintains audit trail for compliance, analytics, and dispute resolution
+- **Trade-off**: Database storage grows over time; archival strategy needed for production
+
+### 13.2 Simplified Design Decisions
+
+**Simplified Order Status Flow**
+
+Original Design (6 statuses): PENDING, CONFIRMED, PAID, COMPLETED, CANCELLED, PAYMENT_FAILED
+
+Current Implementation (3 statuses): PENDING, CONFIRMED, CANCELLED
+
+**Rationale**:
+- Requirement change requested simplified flow
+- PAID and COMPLETED merged into CONFIRMED (payment success = order confirmed)
+- PAYMENT_FAILED removed; failed payments leave order in PENDING for retry
+- Reduces complexity while meeting core business needs
+- Clearer status semantics: PENDING = before payment, CONFIRMED = after payment
+
+**Trade-offs**:
+- Less granular order lifecycle tracking
+- Cannot distinguish between paid-but-not-shipped vs fully-completed orders
+- Acceptable for current requirements; can extend if needed
+
+**DELETE Endpoint Removed**
+
+Original Design: Separate `DELETE /api/orders/{id}` endpoint
+
+Current Implementation: Cancellation via `PUT /api/orders/{id}` with `status: "CANCELLED"`
+
+**Rationale**:
+- Cancellation is a status update, not resource deletion
+- RESTful semantics: DELETE implies resource removal
+- Status update provides better audit trail
+- Only CONFIRMED orders can be cancelled (business rule enforcement)
+
+**Benefits**:
+- Clearer API semantics
+- Consistent audit trail
+- Status transition validation in one place
+- Prevents accidental data loss
+
+### 13.3 Architecture Decisions
+
+**Adapter Pattern for External Services**
+
+**Design**:
+- Interface-based design: `MemberServiceClient`, `ProductServiceClient`, `PaymentServiceClient`
+- Multiple implementations: Mock (development/testing) and REST (production)
+- Runtime selection via `@ConditionalOnProperty(name = "external.mock.enabled")`
+
+**Rationale**:
+- Enables development/testing without external dependencies
+- Zero code changes to switch between mock and production modes
+- Both implementations available in codebase for reference
+- Clean separation of concerns
+
+**Benefits**:
+- **Fast Development**: No need for external service setup
+- **Reliable Testing**: Deterministic mock responses with special test cases
+- **Production Ready**: REST clients with resilience patterns ready to deploy
+- **Easy Debugging**: Mock logging clearly identifies when mocks are active
+
+**Transaction Management Strategy**
+
+Payment failures do NOT rollback order creation.
+
+**Implementation**:
+```java
+// Save order with PENDING status BEFORE payment
+order = orderRepository.save(order);
+
+// Process payment (can fail)
+try {
+    PaymentDto payment = paymentServiceClient.createPayment(paymentRequest);
+    order.setStatus(OrderStatus.CONFIRMED);
+    order = orderRepository.save(order);
+} catch (Exception e) {
+    // Order remains PENDING in database
+    throw new PaymentFailedException(...);
+}
+```
+
+**Rationale**:
+- Order record exists even if payment fails
+- Enables payment retry without recreating order
+- Audit trail of all attempted orders
+- Idempotency: same order can retry payment
+
+**Benefits**:
+- Better user experience (can retry payment)
+- Better analytics (see all attempted orders, not just successful)
+- Compliance (audit trail requirement)
 
 ---
 
