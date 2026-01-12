@@ -4,6 +4,8 @@ import com.sotatek.order.service.external.ProductServiceClient;
 import com.sotatek.order.service.external.dto.ProductDto;
 import com.sotatek.order.service.external.dto.ProductStockDto;
 import com.sotatek.order.exception.ProductNotFoundException;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
@@ -23,6 +25,8 @@ import java.math.BigDecimal;
 public class MockProductServiceClient implements ProductServiceClient {
 
     @Override
+    @CircuitBreaker(name = "productService")
+    @Retry(name = "productService")
     public ProductDto getProduct(Long productId) {
         log.info("[MOCK] Getting product: productId={}", productId);
 
@@ -53,6 +57,8 @@ public class MockProductServiceClient implements ProductServiceClient {
     }
 
     @Override
+    @CircuitBreaker(name = "productService")
+    @Retry(name = "productService")
     public ProductStockDto getProductStock(Long productId) {
         log.info("[MOCK] Getting product stock: productId={}", productId);
 

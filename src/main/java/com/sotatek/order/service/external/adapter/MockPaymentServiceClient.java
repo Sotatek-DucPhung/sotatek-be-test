@@ -5,6 +5,8 @@ import com.sotatek.order.service.external.dto.PaymentDto;
 import com.sotatek.order.service.external.dto.PaymentRequestDto;
 import com.sotatek.order.exception.PaymentFailedException;
 import com.sotatek.order.exception.PaymentNotFoundException;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
@@ -29,6 +31,8 @@ public class MockPaymentServiceClient implements PaymentServiceClient {
     private final AtomicLong paymentIdGenerator = new AtomicLong(5000L);
 
     @Override
+    @CircuitBreaker(name = "paymentService")
+    @Retry(name = "paymentService")
     public PaymentDto createPayment(PaymentRequestDto request) {
         log.info("[MOCK] Creating payment: orderId={}, amount={}, method={}",
                 request.getOrderId(), request.getAmount(), request.getPaymentMethod());
@@ -57,6 +61,8 @@ public class MockPaymentServiceClient implements PaymentServiceClient {
     }
 
     @Override
+    @CircuitBreaker(name = "paymentService")
+    @Retry(name = "paymentService")
     public PaymentDto getPayment(Long paymentId) {
         log.info("[MOCK] Getting payment: paymentId={}", paymentId);
 

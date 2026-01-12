@@ -32,7 +32,6 @@ dependencies {
 
     // Database
     runtimeOnly 'org.postgresql:postgresql'
-    runtimeOnly 'com.h2database:h2'  // For testing
 
     // API Documentation
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0'
@@ -48,16 +47,27 @@ dependencies {
 
     // Testing
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
-    testImplementation 'org.wiremock:wiremock-standalone:3.3.1'
     testImplementation 'com.h2database:h2'
-
-    testCompileOnly 'org.projectlombok:lombok:1.18.30'
-    testAnnotationProcessor 'org.projectlombok:lombok:1.18.30'
 }
 
 tasks.named('test') {
     useJUnitPlatform()
+    exclude '**/integration/**'
+    exclude '**/*IntegrationTest.*'
+    exclude '**/*ResiliencePatternTest.*'
     finalizedBy jacocoTestReport
+}
+
+tasks.register('e2eTest', Test) {
+    description = 'Runs integration and resilience tests.'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    include '**/integration/**'
+    include '**/*IntegrationTest.*'
+    include '**/*ResiliencePatternTest.*'
+    shouldRunAfter test
 }
 
 jacoco {

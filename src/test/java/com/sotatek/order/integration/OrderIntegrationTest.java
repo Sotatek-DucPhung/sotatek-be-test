@@ -4,9 +4,14 @@ import com.sotatek.order.controller.request.CreateOrderRequest;
 import com.sotatek.order.controller.request.OrderItemRequest;
 import com.sotatek.order.controller.request.UpdateOrderRequest;
 import com.sotatek.order.controller.response.OrderResponse;
+import com.sotatek.order.domain.Order;
+import com.sotatek.order.domain.OrderItem;
 import com.sotatek.order.domain.OrderStatus;
 import com.sotatek.order.domain.PaymentMethod;
 import com.sotatek.order.repository.OrderRepository;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.retry.RetryRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,7 +23,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.math.BigDecimal;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -36,10 +43,17 @@ class OrderIntegrationTest {
     @Autowired
     private OrderRepository orderRepository;
 
+    @Autowired
+    private RetryRegistry retryRegistry;
+
+    @Autowired
+    private CircuitBreakerRegistry circuitBreakerRegistry;
+
     @BeforeEach
     void setUp() {
         // Clean up database before each test
         orderRepository.deleteAll();
+        circuitBreakerRegistry.circuitBreaker("memberService").reset();
     }
 
     @Test
@@ -76,6 +90,12 @@ class OrderIntegrationTest {
 
         // Verify database persistence
         assertThat(orderRepository.count()).isEqualTo(1);
+        Order storedOrder = orderRepository.findByIdWithItems(response.getBody().getId())
+                .orElseThrow();
+        assertThat(storedOrder.getStatus()).isEqualTo(OrderStatus.CONFIRMED);
+        assertThat(storedOrder.getTotalAmount()).isEqualByComparingTo(response.getBody().getTotalAmount());
+        assertThat(storedOrder.getPaymentId()).isEqualTo(response.getBody().getPaymentId());
+        assertThat(storedOrder.getItems()).hasSize(1);
     }
 
     @Test
@@ -334,5 +354,122 @@ class OrderIntegrationTest {
         // Assert
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).contains("INVALID_ORDER_STATUS");
+    }
+
+    @Test
+    void updateOrderUpdatesItemsInDatabase() {
+        Order order = Order.builder()
+                .memberId(1L)
+                .memberName("Mock Member 1")
+                .status(OrderStatus.PENDING)
+                .paymentMethod(PaymentMethod.CREDIT_CARD)
+                .totalAmount(BigDecimal.ZERO)
+                .build();
+
+        OrderItem item = OrderItem.builder()
+                .productId(2001L)
+                .productName("Mock Product 2001")
+                .unitPrice(BigDecimal.valueOf(99.99))
+                .quantity(1)
+                .build();
+        item.calculateSubtotal();
+        order.addItem(item);
+        order.calculateTotalAmount();
+
+        Order savedOrder = orderRepository.save(order);
+
+        UpdateOrderRequest updateRequest = UpdateOrderRequest.builder()
+                .items(List.of(
+                        OrderItemRequest.builder()
+                                .productId(2002L)
+                                .quantity(2)
+                                .build()
+                ))
+                .build();
+
+        ResponseEntity<OrderResponse> response = restTemplate.exchange(
+                "/api/orders/" + savedOrder.getId(),
+                HttpMethod.PUT,
+                new HttpEntity<>(updateRequest),
+                OrderResponse.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).isNotNull();
+
+        Order updatedOrder = orderRepository.findByIdWithItems(savedOrder.getId())
+                .orElseThrow();
+        assertThat(updatedOrder.getItems()).hasSize(1);
+        assertThat(updatedOrder.getItems().get(0).getProductId()).isEqualTo(2002L);
+        assertThat(updatedOrder.getItems().get(0).getQuantity()).isEqualTo(2);
+        assertThat(updatedOrder.getTotalAmount()).isEqualByComparingTo(BigDecimal.valueOf(199.98));
+    }
+
+    @Test
+    void createOrderRetriesWhenMemberServiceTimesOut() {
+        AtomicInteger retryEvents = new AtomicInteger();
+        retryRegistry.retry("memberService")
+                .getEventPublisher()
+                .onRetry(event -> retryEvents.incrementAndGet());
+
+        CreateOrderRequest request = CreateOrderRequest.builder()
+                .memberId(5555L) // Mock triggers ResourceAccessException
+                .paymentMethod(PaymentMethod.CREDIT_CARD)
+                .items(List.of(
+                        OrderItemRequest.builder()
+                                .productId(2001L)
+                                .quantity(1)
+                                .build()
+                ))
+                .build();
+
+        ResponseEntity<String> response = restTemplate.postForEntity(
+                "/api/orders",
+                request,
+                String.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(response.getBody()).contains("EXTERNAL_SERVICE_UNAVAILABLE");
+        assertThat(retryEvents.get()).isEqualTo(2);
+    }
+
+    @Test
+    void createOrderOpensCircuitBreakerAfterFailures() {
+        CircuitBreaker circuitBreaker = circuitBreakerRegistry.circuitBreaker("memberService");
+
+        CreateOrderRequest request = CreateOrderRequest.builder()
+                .memberId(7777L) // Mock triggers ExternalServiceException
+                .paymentMethod(PaymentMethod.CREDIT_CARD)
+                .items(List.of(
+                        OrderItemRequest.builder()
+                                .productId(2001L)
+                                .quantity(1)
+                                .build()
+                ))
+                .build();
+
+        for (int i = 0; i < 4; i++) {
+            ResponseEntity<String> response = restTemplate.postForEntity(
+                    "/api/orders",
+                    request,
+                    String.class
+            );
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+            assertThat(response.getBody()).contains("EXTERNAL_SERVICE_UNAVAILABLE");
+        }
+
+        assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.OPEN);
+
+        ResponseEntity<String> response = restTemplate.postForEntity(
+                "/api/orders",
+                request,
+                String.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(response.getBody()).contains("EXTERNAL_SERVICE_UNAVAILABLE");
+        assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.OPEN);
     }
 }

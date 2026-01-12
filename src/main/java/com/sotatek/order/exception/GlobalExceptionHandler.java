@@ -1,6 +1,7 @@
 package com.sotatek.order.exception;
 
 import com.sotatek.order.controller.response.ErrorResponse;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -9,6 +10,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.client.ResourceAccessException;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -51,6 +53,20 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleExternalService(ExternalServiceException ex) {
         log.error("External service error: {}", ex.getMessage(), ex);
         return buildResponse(ex, HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    @ExceptionHandler(ResourceAccessException.class)
+    public ResponseEntity<ErrorResponse> handleResourceAccess(ResourceAccessException ex) {
+        log.error("External service unavailable: {}", ex.getMessage(), ex);
+        ExternalServiceException mapped = new ExternalServiceException("External service unavailable", ex);
+        return buildResponse(mapped, HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    @ExceptionHandler(CallNotPermittedException.class)
+    public ResponseEntity<ErrorResponse> handleCircuitBreakerOpen(CallNotPermittedException ex) {
+        log.error("Circuit breaker open: {}", ex.getMessage());
+        ExternalServiceException mapped = new ExternalServiceException("External service temporarily unavailable", ex);
+        return buildResponse(mapped, HttpStatus.SERVICE_UNAVAILABLE);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
