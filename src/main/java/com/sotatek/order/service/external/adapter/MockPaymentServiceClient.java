@@ -3,6 +3,7 @@ package com.sotatek.order.service.external.adapter;
 import com.sotatek.order.service.external.PaymentServiceClient;
 import com.sotatek.order.service.external.dto.PaymentDto;
 import com.sotatek.order.service.external.dto.PaymentRequestDto;
+import com.sotatek.order.service.external.dto.PaymentStatus;
 import com.sotatek.order.exception.PaymentFailedException;
 import com.sotatek.order.exception.PaymentNotFoundException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
@@ -51,7 +52,7 @@ public class MockPaymentServiceClient implements PaymentServiceClient {
                 .id(paymentId)
                 .orderId(request.getOrderId())
                 .amount(request.getAmount())
-                .status("COMPLETED")
+                .status(PaymentStatus.COMPLETED)
                 .transactionId(transactionId)
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
@@ -76,7 +77,7 @@ public class MockPaymentServiceClient implements PaymentServiceClient {
                 .id(paymentId)
                 .orderId(1L)
                 .amount(java.math.BigDecimal.valueOf(99.99))
-                .status("COMPLETED")
+                .status(PaymentStatus.COMPLETED)
                 .transactionId("TXN-MOCK-" + paymentId)
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();

@@ -2,6 +2,8 @@ package com.sotatek.order.service.external.adapter;
 
 import com.sotatek.order.service.external.MemberServiceClient;
 import com.sotatek.order.service.external.dto.MemberDto;
+import com.sotatek.order.service.external.dto.MemberGrade;
+import com.sotatek.order.service.external.dto.MemberStatus;
 import com.sotatek.order.exception.ExternalServiceException;
 import com.sotatek.order.exception.MemberNotFoundException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
@@ -51,8 +53,8 @@ public class MockMemberServiceClient implements MemberServiceClient {
                     .id(memberId)
                     .name("Inactive Member")
                     .email("inactive@example.com")
-                    .status("INACTIVE")
-                    .grade("BRONZE")
+                    .status(MemberStatus.INACTIVE)
+                    .grade(MemberGrade.BRONZE)
                     .build();
         }
 
@@ -62,8 +64,8 @@ public class MockMemberServiceClient implements MemberServiceClient {
                 .id(memberId)
                 .name("Mock Member " + memberId)
                 .email("member" + memberId + "@example.com")
-                .status("ACTIVE")
-                .grade("GOLD")
+                .status(MemberStatus.ACTIVE)
+                .grade(MemberGrade.GOLD)
                 .build();
     }
 }

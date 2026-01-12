@@ -17,6 +17,6 @@ public class MemberDto {
     private Long id;
     private String name;
     private String email;
-    private String status;  // ACTIVE, INACTIVE, SUSPENDED
-    private String grade;   // BRONZE, SILVER, GOLD, PLATINUM
+    private MemberStatus status;
+    private MemberGrade grade;
 }

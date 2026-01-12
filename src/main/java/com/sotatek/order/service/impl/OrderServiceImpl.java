@@ -55,7 +55,7 @@ public class OrderServiceImpl implements OrderService {
         log.debug("Validating member: memberId={}", request.getMemberId());
         MemberDto member = memberServiceClient.getMember(request.getMemberId());
 
-        if (!"ACTIVE".equals(member.getStatus())) {
+        if (member.getStatus() != MemberStatus.ACTIVE) {
             log.error("Member is not active: memberId={}, status={}", request.getMemberId(), member.getStatus());
             throw new MemberValidationException("Member is not active: status=" + member.getStatus());
         }
@@ -79,7 +79,7 @@ public class OrderServiceImpl implements OrderService {
             // Validate product exists and is available
             ProductDto product = productServiceClient.getProduct(productId);
 
-            if (!"AVAILABLE".equals(product.getStatus())) {
+            if (product.getStatus() != ProductStatus.AVAILABLE) {
                 log.error("Product is not available: productId={}, status={}", productId, product.getStatus());
                 throw new ProductValidationException("Product is not available: productId=" + productId +
                         ", status=" + product.getStatus());
@@ -123,7 +123,7 @@ public class OrderServiceImpl implements OrderService {
             PaymentRequestDto paymentRequest = PaymentRequestDto.builder()
                     .orderId(order.getId())
                     .amount(order.getTotalAmount())
-                    .paymentMethod(order.getPaymentMethod().name())
+                    .paymentMethod(order.getPaymentMethod())
                     .build();
 
             PaymentDto payment = paymentServiceClient.createPayment(paymentRequest);

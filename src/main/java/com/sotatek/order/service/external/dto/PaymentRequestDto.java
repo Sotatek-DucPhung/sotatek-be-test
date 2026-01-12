@@ -1,5 +1,6 @@
 package com.sotatek.order.service.external.dto;
 
+import com.sotatek.order.domain.PaymentMethod;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -18,5 +19,5 @@ public class PaymentRequestDto {
 
     private Long orderId;
     private BigDecimal amount;
-    private String paymentMethod;  // CREDIT_CARD, DEBIT_CARD, BANK_TRANSFER
+    private PaymentMethod paymentMethod;
 }

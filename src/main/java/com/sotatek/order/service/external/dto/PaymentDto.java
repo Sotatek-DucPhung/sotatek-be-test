@@ -20,7 +20,7 @@ public class PaymentDto {
     private Long id;
     private Long orderId;
     private BigDecimal amount;
-    private String status;  // PENDING, COMPLETED, FAILED, REFUNDED
+    private PaymentStatus status;
     private String transactionId;
     private OffsetDateTime createdAt;
 }

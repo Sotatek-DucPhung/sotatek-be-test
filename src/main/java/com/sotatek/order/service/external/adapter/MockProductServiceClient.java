@@ -2,6 +2,7 @@ package com.sotatek.order.service.external.adapter;
 
 import com.sotatek.order.service.external.ProductServiceClient;
 import com.sotatek.order.service.external.dto.ProductDto;
+import com.sotatek.order.service.external.dto.ProductStatus;
 import com.sotatek.order.service.external.dto.ProductStockDto;
 import com.sotatek.order.exception.ProductNotFoundException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
@@ -42,7 +43,7 @@ public class MockProductServiceClient implements ProductServiceClient {
                     .id(productId)
                     .name("Out of Stock Product")
                     .price(BigDecimal.valueOf(0.00))
-                    .status("OUT_OF_STOCK")
+                    .status(ProductStatus.OUT_OF_STOCK)
                     .build();
         }
 
@@ -52,7 +53,7 @@ public class MockProductServiceClient implements ProductServiceClient {
                 .id(productId)
                 .name("Mock Product " + productId)
                 .price(BigDecimal.valueOf(99.99))
-                .status("AVAILABLE")
+                .status(ProductStatus.AVAILABLE)
                 .build();
     }
 

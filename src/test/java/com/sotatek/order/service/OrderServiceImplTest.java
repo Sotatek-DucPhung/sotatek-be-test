@@ -75,7 +75,7 @@ class OrderServiceImplTest {
         MemberDto member = MemberDto.builder()
                 .id(1L)
                 .name("Inactive Member")
-                .status("INACTIVE")
+                .status(MemberStatus.INACTIVE)
                 .build();
 
         when(memberServiceClient.getMember(1L)).thenReturn(member);
@@ -91,7 +91,7 @@ class OrderServiceImplTest {
                 .id(2001L)
                 .name("Discontinued")
                 .price(BigDecimal.valueOf(10.00))
-                .status("DISCONTINUED")
+                .status(ProductStatus.DISCONTINUED)
                 .build());
 
         assertThrows(ProductValidationException.class, () -> orderService.createOrder(request));
@@ -321,7 +321,7 @@ class OrderServiceImplTest {
         return MemberDto.builder()
                 .id(memberId)
                 .name("Member " + memberId)
-                .status("ACTIVE")
+                .status(MemberStatus.ACTIVE)
                 .build();
     }
 
@@ -330,7 +330,7 @@ class OrderServiceImplTest {
                 .id(productId)
                 .name("Product " + productId)
                 .price(BigDecimal.valueOf(10.00))
-                .status("AVAILABLE")
+                .status(ProductStatus.AVAILABLE)
                 .build();
     }
 
@@ -348,7 +348,7 @@ class OrderServiceImplTest {
                 .id(100L)
                 .orderId(orderId)
                 .amount(BigDecimal.valueOf(20.00))
-                .status("COMPLETED")
+                .status(PaymentStatus.COMPLETED)
                 .transactionId("TXN-12345")
                 .createdAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();

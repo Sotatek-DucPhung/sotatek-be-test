@@ -19,5 +19,5 @@ public class ProductDto {
     private Long id;
     private String name;
     private BigDecimal price;
-    private String status;  // AVAILABLE, OUT_OF_STOCK, DISCONTINUED
+    private ProductStatus status;
 }
