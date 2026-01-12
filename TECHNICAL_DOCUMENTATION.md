@@ -34,7 +34,7 @@ The Order Microservice is a RESTful service responsible for managing the complet
 ### 1.2 Scope
 
 **In Scope:**
-- Order CRUD operations (Create, Read, Update, Delete)
+- Order creation, retrieval, listing, and cancellation (status update only)
 - Order validation through external service integration
 - Payment processing orchestration
 - Order status management and state transitions
@@ -200,11 +200,15 @@ com.sotatek.order/
 │   └── PaymentMethod.java                  # Payment method enum
 │
 ├── exception/                               # Exception Handling
+│   ├── OrderException.java
 │   ├── OrderNotFoundException.java
+│   ├── MemberNotFoundException.java
 │   ├── MemberValidationException.java
+│   ├── ProductNotFoundException.java
 │   ├── ProductValidationException.java
 │   ├── InsufficientStockException.java
 │   ├── PaymentFailedException.java
+│   ├── PaymentNotFoundException.java
 │   ├── InvalidOrderStatusException.java
 │   ├── ExternalServiceException.java
 │   └── GlobalExceptionHandler.java         # Centralized error handling
@@ -581,8 +585,8 @@ Content-Type: application/json
 
 3. **Order Persistence**
    - Save order with status = PENDING
-   - Order is committed to database before payment attempt
-   - Transaction boundary: ensures order exists even if payment fails
+   - Order is saved within the same transaction as payment processing
+   - Current behavior: a payment failure rolls back the transaction (see Known Gaps)
 
 4. **Payment Processing**
    - Call `paymentServiceClient.createPayment(paymentRequest)`
@@ -591,9 +595,8 @@ Content-Type: application/json
      - Store paymentId and transactionId
      - Save updated order
    - If failed:
-     - Order remains PENDING in database
      - Throw `PaymentFailedException`
-     - User can retry payment later
+     - Order persistence depends on transaction behavior (see Known Gaps)
 
 **Fail-Fast Approach**: Validation stops at first failure, preventing unnecessary external service calls.
 
@@ -792,9 +795,8 @@ Content-Type: application/json
 
 **Endpoint:** `PUT /api/orders/{id}`
 
-**Description:** Updates an existing order.
-- **Item updates**: Only PENDING orders can update items
-- **Status changes**: Can transition CONFIRMED orders to CANCELLED
+**Description:** Cancels a confirmed order (status update only).
+- **Status changes**: Only `CONFIRMED` → `CANCELLED` is supported
 
 **Path Parameters:**
 - `id` (required): Order ID (integer)
@@ -802,21 +804,14 @@ Content-Type: application/json
 **Request Body:**
 ```json
 {
-  "items": [
-    {
-      "productId": 2001,
-      "quantity": 3
-    }
-  ],
-  "paymentMethod": "DEBIT_CARD",
   "status": "CANCELLED"
 }
 ```
 
 **Notes:**
-- `items` field is optional - only provide to update order items (PENDING orders only)
-- `paymentMethod` field is optional - only provide to change payment method
-- `status` field is optional - provide to cancel a CONFIRMED order (value: "CANCELLED")
+- `status` is required and must be "CANCELLED"
+- Only CONFIRMED orders can be cancelled
+- `items` and `paymentMethod` updates are not allowed
 
 **Success Response:**
 ```
@@ -827,7 +822,7 @@ Content-Type: application/json
   "id": 1,
   "memberId": 1001,
   "memberName": "John Doe",
-  "status": "PENDING",
+  "status": "CANCELLED",
   "items": [
     {
       "id": 3,
@@ -839,7 +834,7 @@ Content-Type: application/json
     }
   ],
   "totalAmount": 89.97,
-  "paymentMethod": "DEBIT_CARD",
+  "paymentMethod": "CREDIT_CARD",
   "createdAt": "2026-01-12T14:30:00Z",
   "updatedAt": "2026-01-12T15:45:00Z"
 }
@@ -847,17 +842,17 @@ Content-Type: application/json
 
 **Error Responses:**
 ```json
-// 400 Bad Request - Invalid Item Update
+// 400 Bad Request - Items Update Not Allowed
 {
   "code": "INVALID_ORDER_STATUS",
-  "message": "Cannot update order items with status: CONFIRMED. Only PENDING orders can update items.",
+  "message": "Only status update is allowed. Items cannot be updated.",
   "timestamp": "2026-01-12T15:45:00Z"
 }
 
-// 400 Bad Request - Invalid Status Transition
+// 400 Bad Request - Status Update Not Allowed
 {
   "code": "INVALID_ORDER_STATUS",
-  "message": "Cannot change order status from PENDING to CANCELLED",
+  "message": "Only CONFIRMED orders can be cancelled.",
   "timestamp": "2026-01-12T15:45:00Z"
 }
 
@@ -935,7 +930,7 @@ external:
 
 **Purpose:** Validate member exists and is active before creating orders.
 
-**Integration Point:** Order creation and update validation
+**Integration Point:** Order creation validation
 
 **Request Example:**
 ```
@@ -1003,7 +998,7 @@ GET http://member-service:8081/api/members/1001
    }
    ```
 
-**Integration Point:** Order creation and update validation
+**Integration Point:** Order creation validation
 
 **Validation Rules:**
 - Product must exist (404 → `ProductNotFoundException`)
@@ -1047,9 +1042,9 @@ GET http://member-service:8081/api/members/1001
 ```
 
 **Status Handling:**
-- `COMPLETED` → Update order status to PAID, save payment details
-- `FAILED` → Update order status to PAYMENT_FAILED
-- `PENDING` → Keep order in CONFIRMED state (edge case)
+- `COMPLETED` → Update order status to CONFIRMED, save payment details
+- `FAILED` → Throw `PaymentFailedException` and keep order in PENDING state (see Known Gaps)
+- `PENDING` → Treat as not completed and keep order PENDING (edge case)
 
 **Error Handling:**
 - 400 Bad Request → `PaymentFailedException`
@@ -1251,7 +1246,6 @@ log.info("Processing payment: {}", paymentRequest); // ❌ May expose sensitive 
 - Mock dependencies: OrderRepository, External Service Clients
 - Test scenarios:
   - ✅ Create order success
-  - ✅ Update order success
   - ✅ Cancel order success
   - ❌ Member not found
   - ❌ Member not active
@@ -1259,8 +1253,9 @@ log.info("Processing payment: {}", paymentRequest); // ❌ May expose sensitive 
   - ❌ Product not available
   - ❌ Insufficient stock
   - ❌ Payment failed
-  - ❌ Update non-pending order
-  - ❌ Cancel paid order
+  - ❌ Reject item update
+  - ❌ Reject payment method update
+  - ❌ Cancel non-confirmed order
 
 **Controller Layer Tests:**
 - Test file: `OrderControllerTest.java`
