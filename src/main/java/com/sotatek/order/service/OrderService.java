@@ -40,19 +40,12 @@ public interface OrderService {
 
     /**
      * Update an existing order
-     * Only PENDING orders can be updated
+     * - Can update items and payment method for PENDING orders (before payment)
+     * - Can change status from CONFIRMED to CANCELLED (user cancellation)
      *
      * @param id the order ID
      * @param request the order update request
      * @return the updated order response
      */
     OrderResponse updateOrder(Long id, UpdateOrderRequest request);
-
-    /**
-     * Cancel an order
-     * Only PENDING or CONFIRMED orders can be cancelled
-     *
-     * @param id the order ID
-     */
-    void cancelOrder(Long id);
 }

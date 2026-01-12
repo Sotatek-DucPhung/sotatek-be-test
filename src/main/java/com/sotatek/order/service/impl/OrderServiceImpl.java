@@ -133,27 +133,43 @@ public class OrderServiceImpl implements OrderService {
                     throw new RuntimeException("Order not found: id=" + id);
                 });
 
-        // Check if order can be updated
-        if (!order.canBeUpdated()) {
-            log.error("Cannot update order with status: {}", order.getStatus());
-            throw new RuntimeException("Cannot update order with status: " + order.getStatus() +
-                    ". Only PENDING orders can be updated.");
+        // Handle status update (e.g., CONFIRMED → CANCELLED)
+        if (request.getStatus() != null && request.getStatus() != order.getStatus()) {
+            if (!order.canTransitionTo(request.getStatus())) {
+                log.error("Invalid status transition: {} → {}", order.getStatus(), request.getStatus());
+                throw new RuntimeException("Cannot change order status from " + order.getStatus() +
+                        " to " + request.getStatus());
+            }
+            log.info("Updating order status: {} → {}", order.getStatus(), request.getStatus());
+            order.setStatus(request.getStatus());
         }
 
-        // Clear existing items
-        order.clearItems();
+        // Handle items update (only for PENDING orders)
+        if (request.getItems() != null && !request.getItems().isEmpty()) {
+            if (!order.canUpdateItems()) {
+                log.error("Cannot update items for order with status: {}", order.getStatus());
+                throw new RuntimeException("Cannot update order items with status: " + order.getStatus() +
+                        ". Only PENDING orders can update items.");
+            }
 
-        // Add new items
-        for (OrderItemRequest itemRequest : request.getItems()) {
-            OrderItem item = OrderItem.builder()
-                    .productId(itemRequest.getProductId())
-                    .productName("Product " + itemRequest.getProductId()) // Placeholder
-                    .unitPrice(BigDecimal.valueOf(99.99)) // Placeholder price
-                    .quantity(itemRequest.getQuantity())
-                    .build();
+            // Clear existing items
+            order.clearItems();
 
-            item.calculateSubtotal();
-            order.addItem(item);
+            // Add new items
+            for (OrderItemRequest itemRequest : request.getItems()) {
+                OrderItem item = OrderItem.builder()
+                        .productId(itemRequest.getProductId())
+                        .productName("Product " + itemRequest.getProductId()) // Placeholder
+                        .unitPrice(BigDecimal.valueOf(99.99)) // Placeholder price
+                        .quantity(itemRequest.getQuantity())
+                        .build();
+
+                item.calculateSubtotal();
+                order.addItem(item);
+            }
+
+            // Recalculate total amount
+            order.calculateTotalAmount();
         }
 
         // Update payment method if provided
@@ -161,40 +177,12 @@ public class OrderServiceImpl implements OrderService {
             order.setPaymentMethod(request.getPaymentMethod());
         }
 
-        // Recalculate total amount
-        order.calculateTotalAmount();
-
         // Save updated order
         order = orderRepository.save(order);
 
         log.info("Order updated successfully: orderId={}", order.getId());
 
         return mapToOrderResponse(order);
-    }
-
-    @Override
-    @Transactional
-    public void cancelOrder(Long id) {
-        log.info("Cancelling order: id={}", id);
-
-        Order order = orderRepository.findById(id)
-                .orElseThrow(() -> {
-                    log.error("Order not found: id={}", id);
-                    throw new RuntimeException("Order not found: id=" + id);
-                });
-
-        // Check if order can be cancelled
-        if (!order.canBeCancelled()) {
-            log.error("Cannot cancel order with status: {}", order.getStatus());
-            throw new RuntimeException("Cannot cancel order with status: " + order.getStatus() +
-                    ". Only PENDING or CONFIRMED orders can be cancelled.");
-        }
-
-        // Update status to CANCELLED
-        order.setStatus(OrderStatus.CANCELLED);
-        orderRepository.save(order);
-
-        log.info("Order cancelled successfully: orderId={}", order.getId());
     }
 
     /**

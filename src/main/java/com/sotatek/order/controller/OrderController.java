@@ -103,10 +103,11 @@ public class OrderController {
     }
 
     @PutMapping("/{id}")
-    @Operation(summary = "Update order", description = "Updates an existing order. Only PENDING orders can be updated.")
+    @Operation(summary = "Update order",
+               description = "Updates an existing order. Can update items/payment method for PENDING orders (before payment). Can change status from CONFIRMED to CANCELLED (user cancellation).")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Order updated successfully"),
-            @ApiResponse(responseCode = "400", description = "Invalid request data or order cannot be updated"),
+            @ApiResponse(responseCode = "400", description = "Invalid request data or invalid status transition"),
             @ApiResponse(responseCode = "404", description = "Order not found")
     })
     public ResponseEntity<OrderResponse> updateOrder(
@@ -120,24 +121,5 @@ public class OrderController {
         log.info("Order updated successfully: orderId={}", response.getId());
 
         return ResponseEntity.ok(response);
-    }
-
-    @DeleteMapping("/{id}")
-    @Operation(summary = "Cancel order", description = "Cancels an order by changing its status to CANCELLED. Only PENDING or CONFIRMED orders can be cancelled.")
-    @ApiResponses(value = {
-            @ApiResponse(responseCode = "204", description = "Order cancelled successfully"),
-            @ApiResponse(responseCode = "400", description = "Order cannot be cancelled"),
-            @ApiResponse(responseCode = "404", description = "Order not found")
-    })
-    public ResponseEntity<Void> cancelOrder(
-            @Parameter(description = "Order ID", required = true)
-            @PathVariable Long id) {
-        log.info("Received cancel order request: orderId={}", id);
-
-        orderService.cancelOrder(id);
-
-        log.info("Order cancelled successfully: orderId={}", id);
-
-        return ResponseEntity.noContent().build();
     }
 }

@@ -1,8 +1,8 @@
 package com.sotatek.order.controller.request;
 
+import com.sotatek.order.domain.OrderStatus;
 import com.sotatek.order.domain.PaymentMethod;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -13,6 +13,7 @@ import java.util.List;
 
 /**
  * Request DTO for updating an existing order
+ * Can update items, payment method, or status
  */
 @Data
 @NoArgsConstructor
@@ -20,10 +21,14 @@ import java.util.List;
 @Builder
 public class UpdateOrderRequest {
 
-    @NotEmpty(message = "Order must contain at least one item")
     @Size(max = 100, message = "Order cannot contain more than 100 items")
     @Valid
     private List<OrderItemRequest> items;
 
     private PaymentMethod paymentMethod;
+
+    /**
+     * Order status - can be used to cancel order (CONFIRMED → CANCELLED)
+     */
+    private OrderStatus status;
 }

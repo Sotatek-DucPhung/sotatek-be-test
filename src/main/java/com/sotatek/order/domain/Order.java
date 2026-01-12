@@ -113,23 +113,41 @@ public class Order {
     }
 
     /**
-     * Check if the order can be updated
-     * Only PENDING orders can be updated
+     * Check if the order items can be updated
+     * Only PENDING orders (before payment) can update items
      *
-     * @return true if the order can be updated, false otherwise
+     * @return true if the order items can be updated, false otherwise
      */
-    public boolean canBeUpdated() {
+    public boolean canUpdateItems() {
         return status == OrderStatus.PENDING;
     }
 
     /**
-     * Check if the order can be cancelled
-     * Only PENDING or CONFIRMED orders can be cancelled
+     * Check if the order status can be changed to CANCELLED
+     * Only CONFIRMED orders can be cancelled by user
      *
      * @return true if the order can be cancelled, false otherwise
      */
     public boolean canBeCancelled() {
-        return status == OrderStatus.PENDING || status == OrderStatus.CONFIRMED;
+        return status == OrderStatus.CONFIRMED;
+    }
+
+    /**
+     * Check if the status transition is valid
+     *
+     * @param newStatus the new status to transition to
+     * @return true if the transition is valid, false otherwise
+     */
+    public boolean canTransitionTo(OrderStatus newStatus) {
+        if (status == newStatus) {
+            return true; // No change
+        }
+
+        return switch (status) {
+            case PENDING -> newStatus == OrderStatus.CONFIRMED;
+            case CONFIRMED -> newStatus == OrderStatus.CANCELLED;
+            case CANCELLED -> false; // Terminal state
+        };
     }
 
     /**
