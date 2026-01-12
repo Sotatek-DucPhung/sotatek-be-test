@@ -5,7 +5,6 @@ import com.sotatek.order.controller.request.OrderItemRequest;
 import com.sotatek.order.controller.request.UpdateOrderRequest;
 import com.sotatek.order.controller.response.OrderResponse;
 import com.sotatek.order.domain.Order;
-import com.sotatek.order.domain.OrderItem;
 import com.sotatek.order.domain.OrderStatus;
 import com.sotatek.order.domain.PaymentMethod;
 import com.sotatek.order.repository.OrderRepository;
@@ -23,7 +22,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.ActiveProfiles;
 
-import java.math.BigDecimal;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -357,26 +355,24 @@ class OrderIntegrationTest {
     }
 
     @Test
-    void updateOrderUpdatesItemsInDatabase() {
-        Order order = Order.builder()
+    void updateOrderRejectsItemUpdate() {
+        CreateOrderRequest createRequest = CreateOrderRequest.builder()
                 .memberId(1L)
-                .memberName("Mock Member 1")
-                .status(OrderStatus.PENDING)
                 .paymentMethod(PaymentMethod.CREDIT_CARD)
-                .totalAmount(BigDecimal.ZERO)
+                .items(List.of(
+                        OrderItemRequest.builder()
+                                .productId(2001L)
+                                .quantity(1)
+                                .build()
+                ))
                 .build();
 
-        OrderItem item = OrderItem.builder()
-                .productId(2001L)
-                .productName("Mock Product 2001")
-                .unitPrice(BigDecimal.valueOf(99.99))
-                .quantity(1)
-                .build();
-        item.calculateSubtotal();
-        order.addItem(item);
-        order.calculateTotalAmount();
-
-        Order savedOrder = orderRepository.save(order);
+        ResponseEntity<OrderResponse> createResponse = restTemplate.postForEntity(
+                "/api/orders",
+                createRequest,
+                OrderResponse.class
+        );
+        Long orderId = createResponse.getBody().getId();
 
         UpdateOrderRequest updateRequest = UpdateOrderRequest.builder()
                 .items(List.of(
@@ -387,22 +383,15 @@ class OrderIntegrationTest {
                 ))
                 .build();
 
-        ResponseEntity<OrderResponse> response = restTemplate.exchange(
-                "/api/orders/" + savedOrder.getId(),
+        ResponseEntity<String> response = restTemplate.exchange(
+                "/api/orders/" + orderId,
                 HttpMethod.PUT,
                 new HttpEntity<>(updateRequest),
-                OrderResponse.class
+                String.class
         );
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(response.getBody()).isNotNull();
-
-        Order updatedOrder = orderRepository.findByIdWithItems(savedOrder.getId())
-                .orElseThrow();
-        assertThat(updatedOrder.getItems()).hasSize(1);
-        assertThat(updatedOrder.getItems().get(0).getProductId()).isEqualTo(2002L);
-        assertThat(updatedOrder.getItems().get(0).getQuantity()).isEqualTo(2);
-        assertThat(updatedOrder.getTotalAmount()).isEqualByComparingTo(BigDecimal.valueOf(199.98));
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).contains("INVALID_ORDER_STATUS");
     }
 
     @Test

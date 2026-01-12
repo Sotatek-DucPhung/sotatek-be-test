@@ -212,72 +212,33 @@ public class OrderServiceImpl implements OrderService {
                     throw new OrderNotFoundException(id);
                 });
 
-        // Handle status update (e.g., CONFIRMED → CANCELLED)
-        if (request.getStatus() != null && request.getStatus() != order.getStatus()) {
-            if (!order.canTransitionTo(request.getStatus())) {
-                log.error("Invalid status transition: {} → {}", order.getStatus(), request.getStatus());
-                throw new InvalidOrderStatusException("Cannot change order status from " + order.getStatus() +
-                        " to " + request.getStatus());
-            }
-            log.info("Updating order status: {} → {}", order.getStatus(), request.getStatus());
-            order.setStatus(request.getStatus());
-        }
-
-        // Handle items update (only for PENDING orders)
         if (request.getItems() != null && !request.getItems().isEmpty()) {
-            if (!order.canUpdateItems()) {
-                log.error("Cannot update items for order with status: {}", order.getStatus());
-                throw new InvalidOrderStatusException("Cannot update order items with status: " + order.getStatus() +
-                        ". Only PENDING orders can update items.");
-            }
-
-            // Clear existing items
-            order.clearItems();
-
-            // Add new items
-            for (OrderItemRequest itemRequest : request.getItems()) {
-                Long productId = itemRequest.getProductId();
-                Integer requestedQuantity = itemRequest.getQuantity();
-
-                log.debug("Validating product for update: productId={}, requestedQuantity={}",
-                        productId, requestedQuantity);
-
-                ProductDto product = productServiceClient.getProduct(productId);
-
-                if (!"AVAILABLE".equals(product.getStatus())) {
-                    log.error("Product is not available: productId={}, status={}", productId, product.getStatus());
-                    throw new ProductValidationException("Product is not available: productId=" + productId +
-                            ", status=" + product.getStatus());
-                }
-
-                ProductStockDto stock = productServiceClient.getProductStock(productId);
-
-                if (stock.getAvailableQuantity() < requestedQuantity) {
-                    log.error("Insufficient stock: productId={}, requested={}, available={}",
-                            productId, requestedQuantity, stock.getAvailableQuantity());
-                    throw new InsufficientStockException("Insufficient stock for product: productId=" + productId +
-                            ", requested=" + requestedQuantity + ", available=" + stock.getAvailableQuantity());
-                }
-
-                OrderItem item = OrderItem.builder()
-                        .productId(productId)
-                        .productName(product.getName())
-                        .unitPrice(product.getPrice())
-                        .quantity(requestedQuantity)
-                        .build();
-
-                item.calculateSubtotal();
-                order.addItem(item);
-            }
-
-            // Recalculate total amount
-            order.calculateTotalAmount();
+            log.error("Order update rejected: items update is not allowed");
+            throw new InvalidOrderStatusException("Only status update is allowed. Items cannot be updated.");
         }
 
-        // Update payment method if provided
         if (request.getPaymentMethod() != null) {
-            order.setPaymentMethod(request.getPaymentMethod());
+            log.error("Order update rejected: payment method update is not allowed");
+            throw new InvalidOrderStatusException("Only status update is allowed. Payment method cannot be updated.");
         }
+
+        if (request.getStatus() == null) {
+            log.error("Order update rejected: status is required");
+            throw new InvalidOrderStatusException("Status is required for order update.");
+        }
+
+        if (request.getStatus() != OrderStatus.CANCELLED) {
+            log.error("Order update rejected: only CANCELLED status is supported, requested={}", request.getStatus());
+            throw new InvalidOrderStatusException("Only status change to CANCELLED is supported.");
+        }
+
+        if (order.getStatus() != OrderStatus.CONFIRMED) {
+            log.error("Order update rejected: only CONFIRMED orders can be cancelled, status={}", order.getStatus());
+            throw new InvalidOrderStatusException("Only CONFIRMED orders can be cancelled.");
+        }
+
+        log.info("Updating order status: {} → {}", order.getStatus(), request.getStatus());
+        order.setStatus(OrderStatus.CANCELLED);
 
         // Save updated order
         order = orderRepository.save(order);

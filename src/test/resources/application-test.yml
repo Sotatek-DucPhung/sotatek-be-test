@@ -1,0 +1,66 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+
+external:
+  mock:
+    enabled: true
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      memberService:
+        sliding-window-size: 4
+        minimum-number-of-calls: 4
+        permitted-number-of-calls-in-half-open-state: 2
+        automatic-transition-from-open-to-half-open-enabled: true
+        wait-duration-in-open-state: 200ms
+        failure-rate-threshold: 50
+      productService:
+        sliding-window-size: 4
+        minimum-number-of-calls: 4
+        permitted-number-of-calls-in-half-open-state: 2
+        automatic-transition-from-open-to-half-open-enabled: true
+        wait-duration-in-open-state: 200ms
+        failure-rate-threshold: 50
+      paymentService:
+        sliding-window-size: 4
+        minimum-number-of-calls: 4
+        permitted-number-of-calls-in-half-open-state: 2
+        automatic-transition-from-open-to-half-open-enabled: true
+        wait-duration-in-open-state: 200ms
+        failure-rate-threshold: 50
+  retry:
+    instances:
+      memberService:
+        max-attempts: 3
+        wait-duration: 10ms
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - org.springframework.web.client.ResourceAccessException
+      productService:
+        max-attempts: 3
+        wait-duration: 10ms
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - org.springframework.web.client.ResourceAccessException
+      paymentService:
+        max-attempts: 3
+        wait-duration: 10ms
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - org.springframework.web.client.ResourceAccessException
+
+logging:
+  level:
+    com.sotatek.order: DEBUG

@@ -188,30 +188,6 @@ class OrderControllerTest {
     }
 
     @Test
-    void updateOrderReturns200Ok() throws Exception {
-        // Arrange
-        UpdateOrderRequest request = UpdateOrderRequest.builder()
-                .items(List.of(OrderItemRequest.builder()
-                        .productId(2001L)
-                        .quantity(3)
-                        .build()))
-                .build();
-
-        OrderResponse response = buildOrderResponse(1L, OrderStatus.PENDING);
-
-        when(orderService.updateOrder(eq(1L), any(UpdateOrderRequest.class)))
-                .thenReturn(response);
-
-        // Act & Assert
-        mockMvc.perform(put("/api/orders/1")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id").value(1))
-                .andExpect(jsonPath("$.status").value("PENDING"));
-    }
-
-    @Test
     void updateOrderCancelsConfirmedOrder() throws Exception {
         // Arrange
         UpdateOrderRequest request = UpdateOrderRequest.builder()

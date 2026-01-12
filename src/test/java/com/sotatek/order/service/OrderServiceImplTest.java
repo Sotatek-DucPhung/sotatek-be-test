@@ -260,33 +260,7 @@ class OrderServiceImplTest {
     }
 
     @Test
-    void updateOrderItemsOnPendingOrder() {
-        // Arrange
-        Order order = buildOrderWithItems(1L, OrderStatus.PENDING);
-        when(orderRepository.findByIdWithItems(1L)).thenReturn(Optional.of(order));
-        when(productServiceClient.getProduct(2002L)).thenReturn(availableProduct(2002L));
-        when(productServiceClient.getProductStock(2002L)).thenReturn(sufficientStock(2002L, 10));
-
-        UpdateOrderRequest request = UpdateOrderRequest.builder()
-                .items(List.of(OrderItemRequest.builder()
-                        .productId(2002L)
-                        .quantity(5)
-                        .build()))
-                .build();
-
-        // Act
-        OrderResponse response = orderService.updateOrder(1L, request);
-
-        // Assert
-        assertThat(response).isNotNull();
-        assertThat(response.getItems()).hasSize(1);
-        assertThat(response.getItems().get(0).getProductId()).isEqualTo(2002L);
-        assertThat(response.getItems().get(0).getQuantity()).isEqualTo(5);
-        verify(orderRepository).save(any(Order.class));
-    }
-
-    @Test
-    void updateOrderRejectsItemUpdateOnConfirmedOrder() {
+    void updateOrderRejectsItemUpdate() {
         // Arrange
         Order order = buildOrderWithItems(1L, OrderStatus.CONFIRMED);
         when(orderRepository.findByIdWithItems(1L)).thenReturn(Optional.of(order));
@@ -299,6 +273,18 @@ class OrderServiceImplTest {
                 .build();
 
         // Act & Assert
+        assertThrows(InvalidOrderStatusException.class, () -> orderService.updateOrder(1L, request));
+    }
+
+    @Test
+    void updateOrderRejectsPaymentMethodUpdate() {
+        Order order = buildOrderWithItems(1L, OrderStatus.CONFIRMED);
+        when(orderRepository.findByIdWithItems(1L)).thenReturn(Optional.of(order));
+
+        UpdateOrderRequest request = UpdateOrderRequest.builder()
+                .paymentMethod(PaymentMethod.DEBIT_CARD)
+                .build();
+
         assertThrows(InvalidOrderStatusException.class, () -> orderService.updateOrder(1L, request));
     }
 
