@@ -11,14 +11,15 @@
 
 1. [System Overview](#1-system-overview)
 2. [Architecture Design](#2-architecture-design)
-3. [Technology Stack](#3-technology-stack)
-4. [Data Model](#4-data-model)
-5. [API Specification](#5-api-specification)
-6. [External Service Integration](#6-external-service-integration)
-7. [Error Handling Strategy](#7-error-handling-strategy)
-8. [Security Considerations](#8-security-considerations)
-9. [Deployment Guide](#9-deployment-guide)
-10. [Known Limitations and Design Decisions](#10-known-limitations-and-design-decisions)
+3. [Technology Decisions](#3-technology-decisions)
+4. [Known Limitations](#4-known-limitations)
+5. [Technology Stack](#5-technology-stack)
+6. [Data Model](#6-data-model)
+7. [API Specification](#7-api-specification)
+8. [External Service Integration](#8-external-service-integration)
+9. [Error Handling Strategy](#9-error-handling-strategy)
+10. [Security Considerations](#10-security-considerations)
+11. [Deployment Guide](#11-deployment-guide)
 
 ---
 
@@ -84,6 +85,11 @@ The Order Microservice is a RESTful service responsible for managing the complet
 ---
 
 ## 2. Architecture Design
+
+**Highlights:**
+- Layered design keeps HTTP, business logic, and persistence concerns isolated.
+- Adapter boundary for external services enables mock/real swaps without code changes.
+- Resilience is applied at client boundaries (circuit breaker + retry).
 
 ### 2.1 Layered Architecture
 
@@ -254,9 +260,85 @@ com.sotatek.order/
 
 ---
 
-## 3. Technology Stack
+## 3. Technology Decisions
 
-### 3.1 Core Technologies
+**Highlights:**
+- External services are abstracted behind client interfaces (adapter pattern).
+- Payment is processed after persisting the order in PENDING status.
+- Status updates are restricted to cancellation only (CONFIRMED → CANCELLED).
+
+### 3.1 Adapter Pattern for External Services
+
+**Design**:
+- Interface-based design: `MemberServiceClient`, `ProductServiceClient`, `PaymentServiceClient`
+- Multiple implementations: Mock (development/testing) and REST (production)
+- Runtime selection via `@ConditionalOnProperty(name = "external.mock.enabled")`
+
+**Rationale**:
+- Enables development/testing without external dependencies
+- Zero code changes to switch between mock and production modes
+- Both implementations available in codebase for reference
+- Clean separation of concerns
+
+**Benefits**:
+- **Fast Development**: No need for external service setup
+- **Reliable Testing**: Deterministic mock responses with special test cases
+- **Production Ready**: REST clients with resilience patterns ready to deploy
+- **Easy Debugging**: Mock logging clearly identifies when mocks are active
+
+### 3.2 Transaction Management Strategy
+
+Payment failures do NOT rollback order creation.
+
+**Implementation**:
+```java
+// Save order with PENDING status BEFORE payment
+order = orderRepository.save(order);
+
+// Process payment (can fail)
+try {
+    PaymentDto payment = paymentServiceClient.createPayment(paymentRequest);
+    order.setStatus(OrderStatus.CONFIRMED);
+    order = orderRepository.save(order);
+} catch (Exception e) {
+    // Order remains PENDING in database
+    throw new PaymentFailedException(...);
+}
+```
+
+**Rationale**:
+- Order record exists even if payment fails
+- Enables payment retry without recreating order
+- Audit trail of all attempted orders
+- Idempotency: same order can retry payment
+
+**Benefits**:
+- Better user experience (can retry payment)
+- Better analytics (see all attempted orders, not just successful)
+- Compliance (audit trail requirement)
+
+## 4. Known Limitations
+
+### 4.1 Concurrent Stock Management
+- **Issue**: Race condition exists when multiple orders try to purchase the same product simultaneously
+- **Impact**: Stock checking and order creation are separate operations, allowing potential overselling
+- **Mitigation**: Acknowledged as known limitation; production system would use optimistic locking or distributed locks
+- **Acceptable Risk**: For assessment scope, the risk is documented
+
+### 4.2 Payment Retry Mechanism
+- **Current Behavior**: Failed payments leave order in PENDING status but no automatic retry
+- **Impact**: Users must manually retry payment
+- **Future Enhancement**: Implement background job for payment retry with exponential backoff
+- **Workaround**: Order remains in PENDING state, allowing manual payment retry via external process
+
+## 5. Technology Stack
+
+**Highlights:**
+- Java 17 + Spring Boot 3.2.0 for modern language/runtime features.
+- PostgreSQL with Flyway migrations for controlled schema evolution.
+- Resilience4j for circuit breaker + retry on external calls.
+
+### 5.1 Core Technologies
 
 | Component | Technology | Version | Purpose |
 |-----------|-----------|---------|---------|
@@ -267,7 +349,7 @@ com.sotatek.order/
 | ORM | Hibernate/JPA | 6.3.x | Object-relational mapping |
 | Database Migration | Flyway | Managed by Spring Boot | Schema migrations |
 
-### 3.2 Key Dependencies
+### 5.2 Key Dependencies
 
 ```gradle
 dependencies {
@@ -300,7 +382,7 @@ dependencies {
 }
 ```
 
-### 3.3 Infrastructure
+### 5.3 Infrastructure
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
@@ -312,9 +394,9 @@ dependencies {
 
 ---
 
-## 4. Data Model
+## 6. Data Model
 
-### 4.1 Entity Relationship Diagram
+### 6.1 Entity Relationship Diagram
 
 ```
 ┌──────────────────────────────────────┐
@@ -346,7 +428,7 @@ dependencies {
 └──────────────────────────────────────┘
 ```
 
-### 4.2 Order Entity
+### 6.2 Order Entity
 
 **Table:** `orders`
 
@@ -369,7 +451,7 @@ dependencies {
 - Index on `status` for filtering by status
 - Index on `created_at` for sorting
 
-### 4.3 OrderItem Entity
+### 6.3 OrderItem Entity
 
 **Table:** `order_items`
 
@@ -388,7 +470,7 @@ dependencies {
 - Index on `order_id` for join optimization
 - Index on `product_id` for product-based queries
 
-### 4.4 Enums
+### 6.4 Enums
 
 **OrderStatus Enum:**
 
@@ -414,17 +496,17 @@ PENDING ──────→ CONFIRMED ──────→ CANCELLED
 - CANCELLED is a terminal state (no further transitions)
 - Payment failures leave order in PENDING status for retry
 
-## 5. API Specification
+## 7. API Specification
 
-### 5.1 Base URL
+### 7.1 Base URL
 
 **Local Development:** `http://localhost:8080`
 **Docker:** `http://localhost:8080`
 **Production:** `https://api.example.com/order-service` (future)
 
-### 5.2 API Endpoints
+### 7.2 API Endpoints
 
-#### 5.2.1 Create Order
+#### 7.2.1 Create Order
 
 **Endpoint:** `POST /api/orders`
 
@@ -481,7 +563,7 @@ Content-Type: application/json
 3. **Order Persistence**
    - Save order with status = PENDING
    - Order is saved within the same transaction as payment processing
-   - Current behavior: a payment failure rolls back the transaction (see Known Limitations and Design Decisions)
+   - Current behavior: a payment failure rolls back the transaction (see Known Limitations)
 
 4. **Payment Processing**
    - Call `paymentServiceClient.createPayment(paymentRequest)`
@@ -491,7 +573,7 @@ Content-Type: application/json
      - Save updated order
    - If failed:
      - Throw `PaymentFailedException`
-     - Order persistence depends on transaction behavior (see Known Limitations and Design Decisions)
+     - Order persistence depends on transaction behavior (see Known Limitations)
 
 **Fail-Fast Approach**: Validation stops at first failure, preventing unnecessary external service calls.
 
@@ -592,7 +674,7 @@ Location: /api/orders/1
 }
 ```
 
-#### 5.2.2 Get Order by ID
+#### 7.2.2 Get Order by ID
 
 **Endpoint:** `GET /api/orders/{id}`
 
@@ -631,7 +713,7 @@ Content-Type: application/json
 }
 ```
 
-#### 5.2.3 List Orders (Paginated)
+#### 7.2.3 List Orders (Paginated)
 
 **Endpoint:** `GET /api/orders`
 
@@ -686,7 +768,7 @@ Content-Type: application/json
 }
 ```
 
-#### 5.2.4 Update Order
+#### 7.2.4 Update Order
 
 **Endpoint:** `PUT /api/orders/{id}`
 
@@ -759,7 +841,7 @@ Content-Type: application/json
 }
 ```
 
-### 5.3 HTTP Status Codes
+### 7.3 HTTP Status Codes
 
 | Status Code | Meaning | Usage |
 |-------------|---------|-------|
@@ -773,9 +855,9 @@ Content-Type: application/json
 
 ---
 
-## 6. External Service Integration
+## 8. External Service Integration
 
-### 6.1 Adapter Pattern Implementation
+### 8.1 Adapter Pattern Implementation
 
 **Design Philosophy:**
 The external service integration uses the Adapter Pattern to enable seamless switching between mock and real service implementations without code changes.
@@ -817,7 +899,7 @@ external:
 - Proper HTTP status code mapping (404 → NotFoundException, etc.)
 - Configurable timeouts via `rest.connection.timeout` and `rest.connection.read-timeout`
 
-### 6.2 Member Service
+### 8.2 Member Service
 
 **Base URL:** `http://member-service:8081` (configurable)
 
@@ -859,7 +941,7 @@ GET http://member-service:8081/api/members/1001
 - Wait duration: 1s
 - Backoff multiplier: 2
 
-### 6.2 Product Service
+### 8.3 Product Service
 
 **Base URL:** `http://product-service:8082` (configurable)
 
@@ -905,7 +987,7 @@ GET http://member-service:8081/api/members/1001
 - Failure threshold: 50%
 - Wait duration: 10s
 
-### 6.3 Payment Service
+### 8.4 Payment Service
 
 **Base URL:** `http://payment-service:8083` (configurable)
 
@@ -938,7 +1020,7 @@ GET http://member-service:8081/api/members/1001
 
 **Status Handling:**
 - `COMPLETED` → Update order status to CONFIRMED, save payment details
-- `FAILED` → Throw `PaymentFailedException` and keep order in PENDING state (see Known Limitations and Design Decisions)
+- `FAILED` → Throw `PaymentFailedException` and keep order in PENDING state (see Known Limitations)
 - `PENDING` → Treat as not completed and keep order PENDING (edge case)
 
 **Error Handling:**
@@ -951,7 +1033,7 @@ GET http://member-service:8081/api/members/1001
 - Failure threshold: 50%
 - Wait duration: 10s
 
-### 6.4 Resilience Patterns
+### 8.5 Resilience Patterns
 
 **Circuit Breaker Strategy:**
 
@@ -986,9 +1068,9 @@ Attempt 1 ─failure─> Wait 1s ─> Attempt 2 ─failure─> Wait 2s ─> Atte
 
 ---
 
-## 7. Error Handling Strategy
+## 9. Error Handling Strategy
 
-### 7.1 Exception Hierarchy
+### 9.1 Exception Hierarchy
 
 ```
 RuntimeException
@@ -1008,7 +1090,7 @@ RuntimeException
     └─ MethodArgumentNotValidException (Spring)
 ```
 
-### 7.2 Exception to HTTP Status Mapping
+### 9.2 Exception to HTTP Status Mapping
 
 | Exception | HTTP Status | Error Code |
 |-----------|-------------|------------|
@@ -1025,7 +1107,7 @@ RuntimeException
 | MethodArgumentNotValidException | 400 Bad Request | VALIDATION_ERROR |
 | Generic Exception | 500 Internal Server Error | INTERNAL_SERVER_ERROR |
 
-### 7.3 Error Response Format
+### 9.3 Error Response Format
 
 ```json
 {
@@ -1041,7 +1123,7 @@ RuntimeException
 }
 ```
 
-### 7.4 Global Exception Handler
+### 9.4 Global Exception Handler
 
 **Implementation:** `@RestControllerAdvice` annotated class
 
@@ -1054,9 +1136,9 @@ RuntimeException
 
 ---
 
-## 8. Security Considerations
+## 10. Security Considerations
 
-### 8.1 Input Validation
+### 10.1 Input Validation
 
 **Validation Rules:**
 - All request DTOs use Bean Validation annotations (@NotNull, @Min, @Max, @Size, etc.)
@@ -1074,36 +1156,16 @@ private Long memberId;
 private List<OrderItemRequest> items;
 ```
 
-## 9. Deployment Guide
+## 11. Deployment Guide
 
-### 9.1 Prerequisites
+### 11.1 Prerequisites
 
 - Docker 20+ and Docker Compose 2+
 - Java 17 JDK (for local development)
 - Gradle 8.12 (or use included wrapper)
 - PostgreSQL 16 (via Docker)
 
-### 9.2 Local Development Setup
-
-**1. Start PostgreSQL:**
-```bash
-docker-compose up postgres -d
-```
-
-**2. Run Application:**
-```bash
-./gradlew bootRun
-```
-
-**3. Access Services:**
-- Application: http://localhost:8080
-- Swagger UI: http://localhost:8080/swagger-ui.html
-
-**4. Database Migrations (Flyway):**
-- Migrations run automatically on startup from `src/main/resources/db/migration`.
-- `spring.jpa.hibernate.ddl-auto=validate` ensures the schema matches entity mappings.
-
-### 9.3 Docker Deployment
+### 11.2 Docker Deployment
 
 **Build Docker Image:**
 ```bash
@@ -1125,7 +1187,7 @@ docker-compose down
 docker-compose logs -f order-service
 ```
 
-### 9.4 Configuration Management
+### 11.3 Configuration Management
 
 **Environment Variables:**
 
@@ -1164,7 +1226,7 @@ export SPRING_PROFILES_ACTIVE=dev
 ./gradlew bootRun
 ```
 
-### 9.5 Health Checks
+### 11.4 Health Checks
 
 **Actuator Endpoints:**
 
@@ -1183,73 +1245,6 @@ healthcheck:
 ```
 
 ---
-## 10. Known Limitations and Design Decisions
-
-### 10.1 Known Limitations
-
-**1. Concurrent Stock Management**
-- **Issue**: Race condition exists when multiple orders try to purchase the same product simultaneously
-- **Impact**: Stock checking and order creation are separate operations, allowing potential overselling
-- **Mitigation**: Acknowledged as known limitation; production system would use optimistic locking or distributed locks
-- **Acceptable Risk**: For assessment scope, the risk is documented
-
-**2. Payment Retry Mechanism**
-- **Current Behavior**: Failed payments leave order in PENDING status but no automatic retry
-- **Impact**: Users must manually retry payment
-- **Future Enhancement**: Implement background job for payment retry with exponential backoff
-- **Workaround**: Order remains in PENDING state, allowing manual payment retry via external process
-
-### 10.2 Architecture Decisions
-
-**Adapter Pattern for External Services**
-
-**Design**:
-- Interface-based design: `MemberServiceClient`, `ProductServiceClient`, `PaymentServiceClient`
-- Multiple implementations: Mock (development/testing) and REST (production)
-- Runtime selection via `@ConditionalOnProperty(name = "external.mock.enabled")`
-
-**Rationale**:
-- Enables development/testing without external dependencies
-- Zero code changes to switch between mock and production modes
-- Both implementations available in codebase for reference
-- Clean separation of concerns
-
-**Benefits**:
-- **Fast Development**: No need for external service setup
-- **Reliable Testing**: Deterministic mock responses with special test cases
-- **Production Ready**: REST clients with resilience patterns ready to deploy
-- **Easy Debugging**: Mock logging clearly identifies when mocks are active
-
-**Transaction Management Strategy**
-
-Payment failures do NOT rollback order creation.
-
-**Implementation**:
-```java
-// Save order with PENDING status BEFORE payment
-order = orderRepository.save(order);
-
-// Process payment (can fail)
-try {
-    PaymentDto payment = paymentServiceClient.createPayment(paymentRequest);
-    order.setStatus(OrderStatus.CONFIRMED);
-    order = orderRepository.save(order);
-} catch (Exception e) {
-    // Order remains PENDING in database
-    throw new PaymentFailedException(...);
-}
-```
-
-**Rationale**:
-- Order record exists even if payment fails
-- Enables payment retry without recreating order
-- Audit trail of all attempted orders
-- Idempotency: same order can retry payment
-
-**Benefits**:
-- Better user experience (can retry payment)
-- Better analytics (see all attempted orders, not just successful)
-- Compliance (audit trail requirement)
 
 ---
 **End of Technical Documentation**
