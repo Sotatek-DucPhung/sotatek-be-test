@@ -51,12 +51,12 @@ App runs at `http://localhost:8080` and Postgres at `localhost:5433`.
 
 Unit + controller tests:
 ```
-./gradlew test
+./gradlew clean test
 ```
 
 Integration/e2e tests:
 ```
-./gradlew e2eTest
+./gradlew clean e2eTest
 ```
 
 All verification:
