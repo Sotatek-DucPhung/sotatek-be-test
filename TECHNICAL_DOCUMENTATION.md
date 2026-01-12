@@ -17,11 +17,8 @@
 6. [External Service Integration](#6-external-service-integration)
 7. [Error Handling Strategy](#7-error-handling-strategy)
 8. [Security Considerations](#8-security-considerations)
-9. [Testing Strategy](#9-testing-strategy)
-10. [Deployment Guide](#10-deployment-guide)
-11. [Monitoring and Logging](#11-monitoring-and-logging)
-12. [Development Guidelines](#12-development-guidelines)
-13. [Known Gaps](#13-known-gaps)
+9. [Deployment Guide](#9-deployment-guide)
+10. [Known Limitations and Design Decisions](#10-known-limitations-and-design-decisions)
 
 ---
 
@@ -80,7 +77,7 @@ The Order Microservice is a RESTful service responsible for managing the complet
                                                 ↓
                                     ┌────────────────────┐
                                     │   PostgreSQL DB    │
-                                    │   (Port 5432)      │
+                                    │   (Port 5433)      │
                                     └────────────────────┘
 ```
 
@@ -268,6 +265,7 @@ com.sotatek.order/
 | Build Tool | Gradle | 8.12 | Build automation |
 | Database | PostgreSQL | 16 | Persistent data storage |
 | ORM | Hibernate/JPA | 6.3.x | Object-relational mapping |
+| Database Migration | Flyway | Managed by Spring Boot | Schema migrations |
 
 ### 3.2 Key Dependencies
 
@@ -282,7 +280,7 @@ dependencies {
 
     // Database
     runtimeOnly 'org.postgresql:postgresql'
-    runtimeOnly 'com.h2database:h2'  // For testing
+    implementation 'org.flywaydb:flyway-core'
 
     // API Documentation
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0'
@@ -298,7 +296,6 @@ dependencies {
 
     // Testing
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
-    testImplementation 'org.wiremock:wiremock-standalone:3.3.1'
     testImplementation 'com.h2database:h2'
 }
 ```
@@ -417,108 +414,6 @@ PENDING ──────→ CONFIRMED ──────→ CANCELLED
 - CANCELLED is a terminal state (no further transitions)
 - Payment failures leave order in PENDING status for retry
 
-**PaymentMethod Enum:**
-
-```java
-public enum PaymentMethod {
-    CREDIT_CARD,
-    DEBIT_CARD,
-    BANK_TRANSFER
-}
-```
-
-### 4.5 Domain Model Classes
-
-**Order.java:**
-```java
-@Entity
-@Table(name = "orders")
-@Getter @Setter
-@NoArgsConstructor
-public class Order {
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
-    @Column(nullable = false)
-    private Long memberId;
-
-    @Column(nullable = false)
-    private String memberName;
-
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    private OrderStatus status;
-
-    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
-    private List<OrderItem> items = new ArrayList<>();
-
-    @Column(nullable = false, precision = 10, scale = 2)
-    private BigDecimal totalAmount;
-
-    @Enumerated(EnumType.STRING)
-    private PaymentMethod paymentMethod;
-
-    private Long paymentId;
-
-    private String transactionId;
-
-    @Column(updatable = false)
-    private LocalDateTime createdAt;
-
-    private LocalDateTime updatedAt;
-
-    @PrePersist
-    protected void onCreate() {
-        createdAt = LocalDateTime.now();
-        updatedAt = LocalDateTime.now();
-        if (status == null) {
-            status = OrderStatus.PENDING;
-        }
-    }
-
-    @PreUpdate
-    protected void onUpdate() {
-        updatedAt = LocalDateTime.now();
-    }
-
-    // Business methods
-    public void addItem(OrderItem item) {
-        items.add(item);
-        item.setOrder(this);
-    }
-
-    public void clearItems() {
-        items.clear();
-    }
-
-    public void calculateTotalAmount() {
-        this.totalAmount = items.stream()
-            .map(OrderItem::getSubtotal)
-            .reduce(BigDecimal.ZERO, BigDecimal::add);
-    }
-
-    public boolean canUpdateItems() {
-        return status == OrderStatus.PENDING;
-    }
-
-    public boolean canBeCancelled() {
-        return status == OrderStatus.CONFIRMED;
-    }
-
-    public boolean canTransitionTo(OrderStatus newStatus) {
-        if (status == newStatus) return true;
-        return switch (status) {
-            case PENDING -> newStatus == OrderStatus.CONFIRMED;
-            case CONFIRMED -> newStatus == OrderStatus.CANCELLED;
-            case CANCELLED -> false; // Terminal state
-        };
-    }
-}
-```
-
----
-
 ## 5. API Specification
 
 ### 5.1 Base URL
@@ -586,7 +481,7 @@ Content-Type: application/json
 3. **Order Persistence**
    - Save order with status = PENDING
    - Order is saved within the same transaction as payment processing
-   - Current behavior: a payment failure rolls back the transaction (see Known Gaps)
+   - Current behavior: a payment failure rolls back the transaction (see Known Limitations and Design Decisions)
 
 4. **Payment Processing**
    - Call `paymentServiceClient.createPayment(paymentRequest)`
@@ -596,7 +491,7 @@ Content-Type: application/json
      - Save updated order
    - If failed:
      - Throw `PaymentFailedException`
-     - Order persistence depends on transaction behavior (see Known Gaps)
+     - Order persistence depends on transaction behavior (see Known Limitations and Design Decisions)
 
 **Fail-Fast Approach**: Validation stops at first failure, preventing unnecessary external service calls.
 
@@ -715,7 +610,7 @@ Content-Type: application/json
   "id": 1,
   "memberId": 1001,
   "memberName": "John Doe",
-  "status": "PAID",
+  "status": "CONFIRMED",
   "items": [...],
   "totalAmount": 69.97,
   "paymentMethod": "CREDIT_CARD",
@@ -1043,7 +938,7 @@ GET http://member-service:8081/api/members/1001
 
 **Status Handling:**
 - `COMPLETED` → Update order status to CONFIRMED, save payment details
-- `FAILED` → Throw `PaymentFailedException` and keep order in PENDING state (see Known Gaps)
+- `FAILED` → Throw `PaymentFailedException` and keep order in PENDING state (see Known Limitations and Design Decisions)
 - `PENDING` → Treat as not completed and keep order PENDING (edge case)
 
 **Error Handling:**
@@ -1179,230 +1074,16 @@ private Long memberId;
 private List<OrderItemRequest> items;
 ```
 
-### 8.2 SQL Injection Prevention
+## 9. Deployment Guide
 
-- Use JPA/Hibernate for database access (parameterized queries)
-- Never concatenate user input into queries
-- Use typed query parameters
-
-### 8.3 Sensitive Data
-
-**Handling:**
-- Do not log payment details (credit card numbers, CVV)
-- Store only payment IDs and transaction references
-- Mask sensitive data in logs
-
-**Example:**
-```java
-log.info("Processing payment for order: {}, amount: {}",
-         orderId,
-         amount); // ✅ OK
-
-log.info("Processing payment: {}", paymentRequest); // ❌ May expose sensitive data
-```
-
-### 8.4 External Service Communication
-
-**Security Measures:**
-- Use HTTPS for production external service calls
-- Implement request timeouts to prevent DoS
-- Validate SSL certificates
-- Use API keys/tokens for authentication (future enhancement)
-
-### 8.5 Rate Limiting
-
-**Recommendation:** Implement at API Gateway level (out of scope for this service)
-
-**Application-Level Fallback:**
-- Circuit Breaker prevents overwhelming external services
-- Database connection pooling prevents resource exhaustion
-
----
-
-## 9. Testing Strategy
-
-### 9.1 Test Pyramid
-
-```
-                    /\
-                   /  \
-                  / E2E \               10% - Integration Tests
-                 /──────\
-                /        \
-               / Service  \             30% - Service Layer Tests
-              /   Layer    \
-             /──────────────\
-            /                \
-           /   Unit Tests     \        60% - Unit Tests
-          /____________________\
-```
-
-### 9.2 Unit Tests
-
-**Target Coverage:** >80%
-
-**Service Layer Tests:**
-- Test file: `OrderServiceImplTest.java`
-- Mock dependencies: OrderRepository, External Service Clients
-- Test scenarios:
-  - ✅ Create order success
-  - ✅ Cancel order success
-  - ❌ Member not found
-  - ❌ Member not active
-  - ❌ Product not found
-  - ❌ Product not available
-  - ❌ Insufficient stock
-  - ❌ Payment failed
-  - ❌ Reject item update
-  - ❌ Reject payment method update
-  - ❌ Cancel non-confirmed order
-
-**Controller Layer Tests:**
-- Test file: `OrderControllerTest.java`
-- Use `@WebMvcTest` and MockMvc
-- Mock service layer
-- Test scenarios:
-  - Request/response JSON serialization
-  - HTTP status codes
-  - Validation error handling
-  - Exception handler integration
-
-**Example Test:**
-```java
-@Test
-void createOrder_whenMemberNotActive_shouldThrowException() {
-    // Given
-    CreateOrderRequest request = createValidOrderRequest();
-    MemberDto inactiveMember = createMemberDto(INACTIVE);
-    when(memberServiceClient.getMember(anyLong()))
-        .thenReturn(inactiveMember);
-
-    // When & Then
-    assertThatThrownBy(() -> orderService.createOrder(request))
-        .isInstanceOf(MemberValidationException.class)
-        .hasMessageContaining("Member is not active");
-}
-```
-
-### 9.3 Integration Tests
-
-**Target:** End-to-end order flow
-
-**Test file:** `OrderIntegrationTest.java`
-
-**Setup:**
-- `@SpringBootTest(webEnvironment = RANDOM_PORT)`
-- Use `TestRestTemplate` for API calls
-- Use WireMock for external service mocking
-- Use H2 in-memory database
-
-**Test scenarios:**
-1. Complete order flow: Create → Get → List → Update → Cancel
-2. Order creation with payment success
-3. Order creation with payment failure
-4. External service unavailability handling
-5. Pagination and filtering
-
-**Example Test:**
-```java
-@Test
-void createOrder_endToEndFlow_shouldCreateOrderAndProcessPayment() {
-    // Given: Mock external services with WireMock
-    stubMemberService(ACTIVE_MEMBER_RESPONSE);
-    stubProductService(AVAILABLE_PRODUCT_RESPONSE);
-    stubPaymentService(SUCCESSFUL_PAYMENT_RESPONSE);
-
-    CreateOrderRequest request = createValidOrderRequest();
-
-    // When: Create order via REST API
-    ResponseEntity<OrderResponse> response = restTemplate.postForEntity(
-        "/api/orders",
-        request,
-        OrderResponse.class
-    );
-
-    // Then: Verify response
-    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
-    OrderResponse order = response.getBody();
-    assertThat(order.getStatus()).isEqualTo(OrderStatus.PAID);
-
-    // And: Verify database state
-    Order savedOrder = orderRepository.findById(order.getId()).get();
-    assertThat(savedOrder.getPaymentId()).isNotNull();
-}
-```
-
-### 9.4 Test Data Management
-
-**Strategy:**
-- Create test data builders for clean test setup
-- Use constants for common test values
-- Avoid hardcoding test data in multiple places
-
-**Example:**
-```java
-public class TestDataBuilder {
-    public static CreateOrderRequest createValidOrderRequest() {
-        return CreateOrderRequest.builder()
-            .memberId(1001L)
-            .items(List.of(
-                OrderItemRequest.builder()
-                    .productId(2001L)
-                    .quantity(2)
-                    .build()
-            ))
-            .paymentMethod(PaymentMethod.CREDIT_CARD)
-            .build();
-    }
-
-    public static MemberDto createActiveMember() {
-        return MemberDto.builder()
-            .id(1001L)
-            .name("John Doe")
-            .status("ACTIVE")
-            .build();
-    }
-}
-```
-
-### 9.5 Mocking External Services
-
-**Unit Tests:** Use Mockito
-```java
-@Mock
-private MemberServiceClient memberServiceClient;
-
-@BeforeEach
-void setUp() {
-    when(memberServiceClient.getMember(1001L))
-        .thenReturn(createActiveMember());
-}
-```
-
-**Integration Tests:** Use WireMock
-```java
-@Test
-void testWithWireMock() {
-    stubFor(get(urlEqualTo("/api/members/1001"))
-        .willReturn(aResponse()
-            .withStatus(200)
-            .withHeader("Content-Type", "application/json")
-            .withBody(activeMemberJson)));
-}
-```
-
----
-
-## 10. Deployment Guide
-
-### 10.1 Prerequisites
+### 9.1 Prerequisites
 
 - Docker 20+ and Docker Compose 2+
 - Java 17 JDK (for local development)
 - Gradle 8.12 (or use included wrapper)
 - PostgreSQL 16 (via Docker)
 
-### 10.2 Local Development Setup
+### 9.2 Local Development Setup
 
 **1. Start PostgreSQL:**
 ```bash
@@ -1417,9 +1098,12 @@ docker-compose up postgres -d
 **3. Access Services:**
 - Application: http://localhost:8080
 - Swagger UI: http://localhost:8080/swagger-ui.html
-- H2 Console (if enabled): http://localhost:8080/h2-console
 
-### 10.3 Docker Deployment
+**4. Database Migrations (Flyway):**
+- Migrations run automatically on startup from `src/main/resources/db/migration`.
+- `spring.jpa.hibernate.ddl-auto=validate` ensures the schema matches entity mappings.
+
+### 9.3 Docker Deployment
 
 **Build Docker Image:**
 ```bash
@@ -1441,7 +1125,7 @@ docker-compose down
 docker-compose logs -f order-service
 ```
 
-### 10.4 Configuration Management
+### 9.4 Configuration Management
 
 **Environment Variables:**
 
@@ -1480,7 +1164,7 @@ export SPRING_PROFILES_ACTIVE=dev
 ./gradlew bootRun
 ```
 
-### 10.5 Health Checks
+### 9.5 Health Checks
 
 **Actuator Endpoints:**
 
@@ -1499,157 +1183,9 @@ healthcheck:
 ```
 
 ---
+## 10. Known Limitations and Design Decisions
 
-## 11. Monitoring and Logging
-
-### 11.1 Logging Strategy
-
-**Log Levels:**
-- **ERROR**: Critical errors requiring immediate attention
-- **WARN**: Potential issues, degraded functionality
-- **INFO**: Business operations, key milestones
-- **DEBUG**: Detailed execution flow (development only)
-
-**Logging Points:**
-
-1. **Controller Layer:**
-   ```java
-   log.info("Received create order request: memberId={}", request.getMemberId());
-   log.info("Order created successfully: orderId={}", order.getId());
-   ```
-
-2. **Service Layer:**
-   ```java
-   log.debug("Validating member: memberId={}", memberId);
-   log.info("Order validation completed: orderId={}", order.getId());
-   log.error("Payment failed for order: orderId={}, error={}", orderId, error);
-   ```
-
-3. **External Service Calls:**
-   ```java
-   log.debug("Calling Member Service: memberId={}", memberId);
-   log.warn("Member Service call failed, retrying: attempt={}", attemptNumber);
-   log.error("Member Service unavailable after retries: memberId={}", memberId);
-   ```
-
-**Log Format:**
-```
-timestamp level [thread] logger : message
-2026-01-12T14:30:00.123Z INFO [http-nio-8080-exec-1] c.s.o.controller.OrderController : Order created successfully: orderId=1
-```
-
-### 11.2 Structured Logging
-
-**Recommendation:** Use structured logging for production
-
-**Example with MDC (Mapped Diagnostic Context):**
-```java
-MDC.put("orderId", order.getId().toString());
-MDC.put("memberId", order.getMemberId().toString());
-log.info("Processing order");
-MDC.clear();
-```
-
-### 11.3 Metrics
-
-**Key Metrics to Track:**
-
-1. **Business Metrics:**
-   - Orders created per hour
-   - Order success rate
-   - Payment success rate
-   - Average order value
-
-2. **Technical Metrics:**
-   - Request latency (p50, p95, p99)
-   - Error rate per endpoint
-   - External service call latency
-   - Circuit breaker state changes
-   - Database connection pool usage
-
-**Implementation:**
-- Use Spring Boot Actuator metrics
-- Integrate with Micrometer (built-in)
-- Export to monitoring system (Prometheus, Grafana - future)
-
-### 11.4 Alerting
-
-**Critical Alerts:**
-- Error rate > 5%
-- External service circuit breaker open
-- Database connection pool exhausted
-- Payment failure rate > 10%
-
----
-
-## 12. Development Guidelines
-
-### 12.1 Code Style
-
-**Java Conventions:**
-- Follow standard Java naming conventions
-- Use meaningful variable and method names
-- Keep methods small and focused (single responsibility)
-- Maximum method length: 30 lines
-- Maximum class length: 300 lines
-
-**Spring Boot Conventions:**
-- Use constructor injection over field injection
-- Prefer `@RestController` over `@Controller` + `@ResponseBody`
-- Use `@Slf4j` Lombok annotation for logging
-
-### 12.2 Git Workflow
-
-**Branch Strategy:**
-- `main`: Production-ready code
-- `develop`: Integration branch
-- `feature/*`: Feature branches
-- `bugfix/*`: Bug fix branches
-
-**Commit Messages:**
-```
-type: subject
-
-body (optional)
-
-Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
-```
-
-**Types:** feat, fix, docs, test, refactor, chore
-
-### 12.3 Code Review Checklist
-
-- [ ] Code follows style guidelines
-- [ ] All tests pass
-- [ ] Test coverage maintained (>80%)
-- [ ] No hardcoded values (use configuration)
-- [ ] Proper error handling
-- [ ] Logging added at appropriate points
-- [ ] Documentation updated
-- [ ] No security vulnerabilities
-
-### 12.4 Performance Considerations
-
-**Database:**
-- Use appropriate indexes
-- Avoid N+1 query problems (use JOIN FETCH)
-- Use pagination for list queries
-
-**External Service Calls:**
-- Always use timeouts
-- Implement circuit breakers
-- Consider caching frequently accessed data (future)
-
-**Memory:**
-- Close resources properly (use try-with-resources)
-- Avoid loading large datasets into memory
-- Use streaming for large responses
-
----
-
-## 13. Known Limitations and Design Decisions
-
-### 13.1 Known Limitations
+### 10.1 Known Limitations
 
 **1. Concurrent Stock Management**
 - **Issue**: Race condition exists when multiple orders try to purchase the same product simultaneously
@@ -1663,51 +1199,7 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
 - **Future Enhancement**: Implement background job for payment retry with exponential backoff
 - **Workaround**: Order remains in PENDING state, allowing manual payment retry via external process
 
-**3. No Physical DELETE**
-- **Design Choice**: Orders are never physically deleted from database
-- **Implementation**: Status changed to CANCELLED for soft delete
-- **Rationale**: Maintains audit trail for compliance, analytics, and dispute resolution
-- **Trade-off**: Database storage grows over time; archival strategy needed for production
-
-### 13.2 Simplified Design Decisions
-
-**Simplified Order Status Flow**
-
-Original Design (6 statuses): PENDING, CONFIRMED, PAID, COMPLETED, CANCELLED, PAYMENT_FAILED
-
-Current Implementation (3 statuses): PENDING, CONFIRMED, CANCELLED
-
-**Rationale**:
-- Requirement change requested simplified flow
-- PAID and COMPLETED merged into CONFIRMED (payment success = order confirmed)
-- PAYMENT_FAILED removed; failed payments leave order in PENDING for retry
-- Reduces complexity while meeting core business needs
-- Clearer status semantics: PENDING = before payment, CONFIRMED = after payment
-
-**Trade-offs**:
-- Less granular order lifecycle tracking
-- Cannot distinguish between paid-but-not-shipped vs fully-completed orders
-- Acceptable for current requirements; can extend if needed
-
-**DELETE Endpoint Removed**
-
-Original Design: Separate `DELETE /api/orders/{id}` endpoint
-
-Current Implementation: Cancellation via `PUT /api/orders/{id}` with `status: "CANCELLED"`
-
-**Rationale**:
-- Cancellation is a status update, not resource deletion
-- RESTful semantics: DELETE implies resource removal
-- Status update provides better audit trail
-- Only CONFIRMED orders can be cancelled (business rule enforcement)
-
-**Benefits**:
-- Clearer API semantics
-- Consistent audit trail
-- Status transition validation in one place
-- Prevents accidental data loss
-
-### 13.3 Architecture Decisions
+### 10.2 Architecture Decisions
 
 **Adapter Pattern for External Services**
 
@@ -1760,33 +1252,4 @@ try {
 - Compliance (audit trail requirement)
 
 ---
-
-## Appendix
-
-### A. Glossary
-
-| Term | Definition |
-|------|------------|
-| Circuit Breaker | Design pattern that prevents cascading failures by failing fast when a service is unavailable |
-| DTO | Data Transfer Object - Object used to transfer data between layers |
-| JPA | Java Persistence API - Java specification for ORM |
-| Retry Pattern | Automatically retry failed operations with exponential backoff |
-| Resilience | Ability of a system to handle and recover from failures |
-
-### B. References
-
-- [Spring Boot Documentation](https://docs.spring.io/spring-boot/docs/current/reference/htmlsingle/)
-- [Resilience4j Documentation](https://resilience4j.readme.io/)
-- [PostgreSQL Documentation](https://www.postgresql.org/docs/)
-- [REST API Best Practices](https://restfulapi.net/)
-
-### C. Contact Information
-
-**Development Team:** Backend Engineering
-**Assessment Contact:** Your Interviewer
-**Documentation Version:** 1.0.0
-**Last Updated:** January 12, 2026
-
----
-
 **End of Technical Documentation**
