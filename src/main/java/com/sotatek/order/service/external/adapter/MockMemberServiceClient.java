@@ -2,6 +2,7 @@ package com.sotatek.order.service.external.adapter;
 
 import com.sotatek.order.service.external.MemberServiceClient;
 import com.sotatek.order.service.external.dto.MemberDto;
+import com.sotatek.order.exception.MemberNotFoundException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
@@ -25,7 +26,7 @@ public class MockMemberServiceClient implements MemberServiceClient {
         // Simulate some members being inactive or not found
         if (memberId == 9999L) {
             log.warn("[MOCK] Member not found: memberId={}", memberId);
-            throw new RuntimeException("Member not found: memberId=" + memberId);
+            throw new MemberNotFoundException(memberId);
         }
 
         if (memberId == 8888L) {

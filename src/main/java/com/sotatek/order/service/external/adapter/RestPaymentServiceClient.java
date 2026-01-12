@@ -3,6 +3,9 @@ package com.sotatek.order.service.external.adapter;
 import com.sotatek.order.service.external.PaymentServiceClient;
 import com.sotatek.order.service.external.dto.PaymentDto;
 import com.sotatek.order.service.external.dto.PaymentRequestDto;
+import com.sotatek.order.exception.ExternalServiceException;
+import com.sotatek.order.exception.PaymentFailedException;
+import com.sotatek.order.exception.PaymentNotFoundException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
 import lombok.RequiredArgsConstructor;
@@ -34,15 +37,18 @@ public class RestPaymentServiceClient implements PaymentServiceClient {
         try {
             PaymentDto payment = restTemplate.postForObject(url, request, PaymentDto.class);
             if (payment == null) {
-                throw new RuntimeException("Payment service returned empty response: orderId=" + request.getOrderId());
+                throw new ExternalServiceException("Payment service returned empty response: orderId=" + request.getOrderId());
             }
             return payment;
         } catch (RestClientResponseException ex) {
+            if (ex.getRawStatusCode() == 400 || ex.getRawStatusCode() == 422) {
+                throw new PaymentFailedException("Payment request rejected: status=" + ex.getRawStatusCode(), ex);
+            }
             log.error("Payment service error: status={}, body={}", ex.getRawStatusCode(), ex.getResponseBodyAsString());
-            throw new RuntimeException("Payment service error: status=" + ex.getRawStatusCode(), ex);
+            throw new ExternalServiceException("Payment service error: status=" + ex.getRawStatusCode(), ex);
         } catch (RestClientException ex) {
             log.error("Payment service call failed: {}", ex.getMessage());
-            throw new RuntimeException("Payment service call failed: " + ex.getMessage(), ex);
+            throw new ExternalServiceException("Payment service call failed: " + ex.getMessage(), ex);
         }
     }
 
@@ -55,15 +61,18 @@ public class RestPaymentServiceClient implements PaymentServiceClient {
         try {
             PaymentDto payment = restTemplate.getForObject(url, PaymentDto.class);
             if (payment == null) {
-                throw new RuntimeException("Payment service returned empty response: paymentId=" + paymentId);
+                throw new ExternalServiceException("Payment service returned empty response: paymentId=" + paymentId);
             }
             return payment;
         } catch (RestClientResponseException ex) {
+            if (ex.getRawStatusCode() == 404) {
+                throw new PaymentNotFoundException(paymentId);
+            }
             log.error("Payment service error: status={}, body={}", ex.getRawStatusCode(), ex.getResponseBodyAsString());
-            throw new RuntimeException("Payment service error: status=" + ex.getRawStatusCode(), ex);
+            throw new ExternalServiceException("Payment service error: status=" + ex.getRawStatusCode(), ex);
         } catch (RestClientException ex) {
             log.error("Payment service call failed: {}", ex.getMessage());
-            throw new RuntimeException("Payment service call failed: " + ex.getMessage(), ex);
+            throw new ExternalServiceException("Payment service call failed: " + ex.getMessage(), ex);
         }
     }
 }

@@ -14,7 +14,8 @@ public interface ProductServiceClient {
      *
      * @param productId the product ID
      * @return the product DTO
-     * @throws RuntimeException if product not found or service unavailable
+     * @throws com.sotatek.order.exception.ProductNotFoundException if product not found
+     * @throws com.sotatek.order.exception.ExternalServiceException if service unavailable
      */
     ProductDto getProduct(Long productId);
 
@@ -23,7 +24,8 @@ public interface ProductServiceClient {
      *
      * @param productId the product ID
      * @return the product stock DTO
-     * @throws RuntimeException if product not found or service unavailable
+     * @throws com.sotatek.order.exception.ProductNotFoundException if product not found
+     * @throws com.sotatek.order.exception.ExternalServiceException if service unavailable
      */
     ProductStockDto getProductStock(Long productId);
 }

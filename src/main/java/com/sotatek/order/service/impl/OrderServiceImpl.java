@@ -9,6 +9,12 @@ import com.sotatek.order.controller.response.PageResponse;
 import com.sotatek.order.domain.Order;
 import com.sotatek.order.domain.OrderItem;
 import com.sotatek.order.domain.OrderStatus;
+import com.sotatek.order.exception.InsufficientStockException;
+import com.sotatek.order.exception.InvalidOrderStatusException;
+import com.sotatek.order.exception.MemberValidationException;
+import com.sotatek.order.exception.OrderNotFoundException;
+import com.sotatek.order.exception.PaymentFailedException;
+import com.sotatek.order.exception.ProductValidationException;
 import com.sotatek.order.repository.OrderRepository;
 import com.sotatek.order.service.OrderService;
 import com.sotatek.order.service.external.MemberServiceClient;
@@ -51,7 +57,7 @@ public class OrderServiceImpl implements OrderService {
 
         if (!"ACTIVE".equals(member.getStatus())) {
             log.error("Member is not active: memberId={}, status={}", request.getMemberId(), member.getStatus());
-            throw new RuntimeException("Member is not active: status=" + member.getStatus());
+            throw new MemberValidationException("Member is not active: status=" + member.getStatus());
         }
 
         // Create order entity with validated member info
@@ -75,7 +81,7 @@ public class OrderServiceImpl implements OrderService {
 
             if (!"AVAILABLE".equals(product.getStatus())) {
                 log.error("Product is not available: productId={}, status={}", productId, product.getStatus());
-                throw new RuntimeException("Product is not available: productId=" + productId +
+                throw new ProductValidationException("Product is not available: productId=" + productId +
                         ", status=" + product.getStatus());
             }
 
@@ -85,7 +91,7 @@ public class OrderServiceImpl implements OrderService {
             if (stock.getAvailableQuantity() < requestedQuantity) {
                 log.error("Insufficient stock: productId={}, requested={}, available={}",
                         productId, requestedQuantity, stock.getAvailableQuantity());
-                throw new RuntimeException("Insufficient stock for product: productId=" + productId +
+                throw new InsufficientStockException("Insufficient stock for product: productId=" + productId +
                         ", requested=" + requestedQuantity + ", available=" + stock.getAvailableQuantity());
             }
 
@@ -132,10 +138,14 @@ public class OrderServiceImpl implements OrderService {
             log.info("Payment processed successfully: orderId={}, paymentId={}, transactionId={}",
                     order.getId(), payment.getId(), payment.getTransactionId());
 
+        } catch (PaymentFailedException e) {
+            log.error("Payment failed for orderId={}: {}", order.getId(), e.getMessage());
+            // Order remains in PENDING status, payment can be retried
+            throw e;
         } catch (Exception e) {
             log.error("Payment failed for orderId={}: {}", order.getId(), e.getMessage());
             // Order remains in PENDING status, payment can be retried
-            throw new RuntimeException("Payment processing failed: " + e.getMessage(), e);
+            throw new PaymentFailedException("Payment processing failed: " + e.getMessage(), e);
         }
 
         log.info("Order created successfully: orderId={}, status={}", order.getId(), order.getStatus());
@@ -151,7 +161,7 @@ public class OrderServiceImpl implements OrderService {
         Order order = orderRepository.findByIdWithItems(id)
                 .orElseThrow(() -> {
                     log.error("Order not found: id={}", id);
-                    throw new RuntimeException("Order not found: id=" + id);
+                    throw new OrderNotFoundException(id);
                 });
 
         return mapToOrderResponse(order);
@@ -199,14 +209,14 @@ public class OrderServiceImpl implements OrderService {
         Order order = orderRepository.findByIdWithItems(id)
                 .orElseThrow(() -> {
                     log.error("Order not found: id={}", id);
-                    throw new RuntimeException("Order not found: id=" + id);
+                    throw new OrderNotFoundException(id);
                 });
 
         // Handle status update (e.g., CONFIRMED → CANCELLED)
         if (request.getStatus() != null && request.getStatus() != order.getStatus()) {
             if (!order.canTransitionTo(request.getStatus())) {
                 log.error("Invalid status transition: {} → {}", order.getStatus(), request.getStatus());
-                throw new RuntimeException("Cannot change order status from " + order.getStatus() +
+                throw new InvalidOrderStatusException("Cannot change order status from " + order.getStatus() +
                         " to " + request.getStatus());
             }
             log.info("Updating order status: {} → {}", order.getStatus(), request.getStatus());
@@ -217,7 +227,7 @@ public class OrderServiceImpl implements OrderService {
         if (request.getItems() != null && !request.getItems().isEmpty()) {
             if (!order.canUpdateItems()) {
                 log.error("Cannot update items for order with status: {}", order.getStatus());
-                throw new RuntimeException("Cannot update order items with status: " + order.getStatus() +
+                throw new InvalidOrderStatusException("Cannot update order items with status: " + order.getStatus() +
                         ". Only PENDING orders can update items.");
             }
 
@@ -236,7 +246,7 @@ public class OrderServiceImpl implements OrderService {
 
                 if (!"AVAILABLE".equals(product.getStatus())) {
                     log.error("Product is not available: productId={}, status={}", productId, product.getStatus());
-                    throw new RuntimeException("Product is not available: productId=" + productId +
+                    throw new ProductValidationException("Product is not available: productId=" + productId +
                             ", status=" + product.getStatus());
                 }
 
@@ -245,7 +255,7 @@ public class OrderServiceImpl implements OrderService {
                 if (stock.getAvailableQuantity() < requestedQuantity) {
                     log.error("Insufficient stock: productId={}, requested={}, available={}",
                             productId, requestedQuantity, stock.getAvailableQuantity());
-                    throw new RuntimeException("Insufficient stock for product: productId=" + productId +
+                    throw new InsufficientStockException("Insufficient stock for product: productId=" + productId +
                             ", requested=" + requestedQuantity + ", available=" + stock.getAvailableQuantity());
                 }
 

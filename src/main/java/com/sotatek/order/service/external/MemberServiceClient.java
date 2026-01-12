@@ -13,7 +13,8 @@ public interface MemberServiceClient {
      *
      * @param memberId the member ID
      * @return the member DTO
-     * @throws RuntimeException if member not found or service unavailable
+     * @throws com.sotatek.order.exception.MemberNotFoundException if member not found
+     * @throws com.sotatek.order.exception.ExternalServiceException if service unavailable
      */
     MemberDto getMember(Long memberId);
 }

@@ -3,6 +3,7 @@ package com.sotatek.order.service.external.adapter;
 import com.sotatek.order.service.external.ProductServiceClient;
 import com.sotatek.order.service.external.dto.ProductDto;
 import com.sotatek.order.service.external.dto.ProductStockDto;
+import com.sotatek.order.exception.ProductNotFoundException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
@@ -28,7 +29,7 @@ public class MockProductServiceClient implements ProductServiceClient {
         // Simulate some products not found or unavailable
         if (productId == 9999L) {
             log.warn("[MOCK] Product not found: productId={}", productId);
-            throw new RuntimeException("Product not found: productId=" + productId);
+            throw new ProductNotFoundException(productId);
         }
 
         if (productId == 8888L) {

@@ -3,6 +3,8 @@ package com.sotatek.order.service.external.adapter;
 import com.sotatek.order.service.external.ProductServiceClient;
 import com.sotatek.order.service.external.dto.ProductDto;
 import com.sotatek.order.service.external.dto.ProductStockDto;
+import com.sotatek.order.exception.ExternalServiceException;
+import com.sotatek.order.exception.ProductNotFoundException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
 import lombok.RequiredArgsConstructor;
@@ -34,15 +36,18 @@ public class RestProductServiceClient implements ProductServiceClient {
         try {
             ProductDto product = restTemplate.getForObject(url, ProductDto.class);
             if (product == null) {
-                throw new RuntimeException("Product service returned empty response: productId=" + productId);
+                throw new ExternalServiceException("Product service returned empty response: productId=" + productId);
             }
             return product;
         } catch (RestClientResponseException ex) {
+            if (ex.getRawStatusCode() == 404) {
+                throw new ProductNotFoundException(productId);
+            }
             log.error("Product service error: status={}, body={}", ex.getRawStatusCode(), ex.getResponseBodyAsString());
-            throw new RuntimeException("Product service error: status=" + ex.getRawStatusCode(), ex);
+            throw new ExternalServiceException("Product service error: status=" + ex.getRawStatusCode(), ex);
         } catch (RestClientException ex) {
             log.error("Product service call failed: {}", ex.getMessage());
-            throw new RuntimeException("Product service call failed: " + ex.getMessage(), ex);
+            throw new ExternalServiceException("Product service call failed: " + ex.getMessage(), ex);
         }
     }
 
@@ -55,15 +60,18 @@ public class RestProductServiceClient implements ProductServiceClient {
         try {
             ProductStockDto stock = restTemplate.getForObject(url, ProductStockDto.class);
             if (stock == null) {
-                throw new RuntimeException("Product stock response is empty: productId=" + productId);
+                throw new ExternalServiceException("Product stock response is empty: productId=" + productId);
             }
             return stock;
         } catch (RestClientResponseException ex) {
+            if (ex.getRawStatusCode() == 404) {
+                throw new ProductNotFoundException(productId);
+            }
             log.error("Product stock error: status={}, body={}", ex.getRawStatusCode(), ex.getResponseBodyAsString());
-            throw new RuntimeException("Product stock error: status=" + ex.getRawStatusCode(), ex);
+            throw new ExternalServiceException("Product stock error: status=" + ex.getRawStatusCode(), ex);
         } catch (RestClientException ex) {
             log.error("Product stock call failed: {}", ex.getMessage());
-            throw new RuntimeException("Product stock call failed: " + ex.getMessage(), ex);
+            throw new ExternalServiceException("Product stock call failed: " + ex.getMessage(), ex);
         }
     }
 }

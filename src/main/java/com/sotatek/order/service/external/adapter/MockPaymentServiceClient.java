@@ -3,6 +3,8 @@ package com.sotatek.order.service.external.adapter;
 import com.sotatek.order.service.external.PaymentServiceClient;
 import com.sotatek.order.service.external.dto.PaymentDto;
 import com.sotatek.order.service.external.dto.PaymentRequestDto;
+import com.sotatek.order.exception.PaymentFailedException;
+import com.sotatek.order.exception.PaymentNotFoundException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
@@ -34,7 +36,7 @@ public class MockPaymentServiceClient implements PaymentServiceClient {
         // Simulate payment failure for orderId 6666
         if (request.getOrderId() == 6666L) {
             log.warn("[MOCK] Payment FAILED for orderId={}", request.getOrderId());
-            throw new RuntimeException("Payment failed: Insufficient funds");
+            throw new PaymentFailedException("Payment failed: Insufficient funds");
         }
 
         // Generate mock successful payment
@@ -60,7 +62,7 @@ public class MockPaymentServiceClient implements PaymentServiceClient {
 
         if (paymentId == 9999L) {
             log.warn("[MOCK] Payment not found: paymentId={}", paymentId);
-            throw new RuntimeException("Payment not found: paymentId=" + paymentId);
+            throw new PaymentNotFoundException(paymentId);
         }
 
         // Return mock payment

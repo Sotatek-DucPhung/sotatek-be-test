@@ -14,7 +14,8 @@ public interface PaymentServiceClient {
      *
      * @param request the payment request
      * @return the payment DTO
-     * @throws RuntimeException if payment fails or service unavailable
+     * @throws com.sotatek.order.exception.PaymentFailedException if payment fails
+     * @throws com.sotatek.order.exception.ExternalServiceException if service unavailable
      */
     PaymentDto createPayment(PaymentRequestDto request);
 
@@ -23,7 +24,8 @@ public interface PaymentServiceClient {
      *
      * @param paymentId the payment ID
      * @return the payment DTO
-     * @throws RuntimeException if payment not found or service unavailable
+     * @throws com.sotatek.order.exception.PaymentNotFoundException if payment not found
+     * @throws com.sotatek.order.exception.ExternalServiceException if service unavailable
      */
     PaymentDto getPayment(Long paymentId);
 }

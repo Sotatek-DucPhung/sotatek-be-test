@@ -2,6 +2,8 @@ package com.sotatek.order.service.external.adapter;
 
 import com.sotatek.order.service.external.MemberServiceClient;
 import com.sotatek.order.service.external.dto.MemberDto;
+import com.sotatek.order.exception.ExternalServiceException;
+import com.sotatek.order.exception.MemberNotFoundException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
 import lombok.RequiredArgsConstructor;
@@ -33,15 +35,18 @@ public class RestMemberServiceClient implements MemberServiceClient {
         try {
             MemberDto member = restTemplate.getForObject(url, MemberDto.class);
             if (member == null) {
-                throw new RuntimeException("Member service returned empty response: memberId=" + memberId);
+                throw new ExternalServiceException("Member service returned empty response: memberId=" + memberId);
             }
             return member;
         } catch (RestClientResponseException ex) {
+            if (ex.getRawStatusCode() == 404) {
+                throw new MemberNotFoundException(memberId);
+            }
             log.error("Member service error: status={}, body={}", ex.getRawStatusCode(), ex.getResponseBodyAsString());
-            throw new RuntimeException("Member service error: status=" + ex.getRawStatusCode(), ex);
+            throw new ExternalServiceException("Member service error: status=" + ex.getRawStatusCode(), ex);
         } catch (RestClientException ex) {
             log.error("Member service call failed: {}", ex.getMessage());
-            throw new RuntimeException("Member service call failed: " + ex.getMessage(), ex);
+            throw new ExternalServiceException("Member service call failed: " + ex.getMessage(), ex);
         }
     }
 }
