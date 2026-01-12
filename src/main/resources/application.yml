@@ -31,6 +31,8 @@ server:
 
 # External service URLs
 external:
+  mock:
+    enabled: ${EXTERNAL_MOCK_ENABLED:true}
   member-service:
     url: ${MEMBER_SERVICE_URL:http://localhost:8081}
   product-service:

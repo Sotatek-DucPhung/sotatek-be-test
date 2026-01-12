@@ -11,6 +11,10 @@ import com.sotatek.order.domain.OrderItem;
 import com.sotatek.order.domain.OrderStatus;
 import com.sotatek.order.repository.OrderRepository;
 import com.sotatek.order.service.OrderService;
+import com.sotatek.order.service.external.MemberServiceClient;
+import com.sotatek.order.service.external.PaymentServiceClient;
+import com.sotatek.order.service.external.ProductServiceClient;
+import com.sotatek.order.service.external.dto.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -24,7 +28,7 @@ import java.util.stream.Collectors;
 
 /**
  * Implementation of OrderService
- * Handles core order business logic
+ * Handles core order business logic with external service integration
  */
 @Service
 @Slf4j
@@ -32,31 +36,65 @@ import java.util.stream.Collectors;
 public class OrderServiceImpl implements OrderService {
 
     private final OrderRepository orderRepository;
+    private final MemberServiceClient memberServiceClient;
+    private final ProductServiceClient productServiceClient;
+    private final PaymentServiceClient paymentServiceClient;
 
     @Override
     @Transactional
     public OrderResponse createOrder(CreateOrderRequest request) {
         log.info("Creating order for member: {}", request.getMemberId());
 
-        // For now, create order without external service validation
-        // Phase 3 will add member/product/payment validation
+        // Step 1: Validate member exists and is active
+        log.debug("Validating member: memberId={}", request.getMemberId());
+        MemberDto member = memberServiceClient.getMember(request.getMemberId());
 
-        // Create order entity
+        if (!"ACTIVE".equals(member.getStatus())) {
+            log.error("Member is not active: memberId={}, status={}", request.getMemberId(), member.getStatus());
+            throw new RuntimeException("Member is not active: status=" + member.getStatus());
+        }
+
+        // Create order entity with validated member info
         Order order = Order.builder()
                 .memberId(request.getMemberId())
-                .memberName("Member " + request.getMemberId()) // Placeholder, will be from Member Service
+                .memberName(member.getName())
                 .status(OrderStatus.PENDING)
                 .paymentMethod(request.getPaymentMethod())
                 .totalAmount(BigDecimal.ZERO)
                 .build();
 
-        // Add order items
+        // Step 2: Validate products and add order items
         for (OrderItemRequest itemRequest : request.getItems()) {
+            Long productId = itemRequest.getProductId();
+            Integer requestedQuantity = itemRequest.getQuantity();
+
+            log.debug("Validating product: productId={}, requestedQuantity={}", productId, requestedQuantity);
+
+            // Validate product exists and is available
+            ProductDto product = productServiceClient.getProduct(productId);
+
+            if (!"AVAILABLE".equals(product.getStatus())) {
+                log.error("Product is not available: productId={}, status={}", productId, product.getStatus());
+                throw new RuntimeException("Product is not available: productId=" + productId +
+                        ", status=" + product.getStatus());
+            }
+
+            // Check stock availability
+            ProductStockDto stock = productServiceClient.getProductStock(productId);
+
+            if (stock.getAvailableQuantity() < requestedQuantity) {
+                log.error("Insufficient stock: productId={}, requested={}, available={}",
+                        productId, requestedQuantity, stock.getAvailableQuantity());
+                throw new RuntimeException("Insufficient stock for product: productId=" + productId +
+                        ", requested=" + requestedQuantity + ", available=" + stock.getAvailableQuantity());
+            }
+
+            // Create order item with real product data
             OrderItem item = OrderItem.builder()
-                    .productId(itemRequest.getProductId())
-                    .productName("Product " + itemRequest.getProductId()) // Placeholder
-                    .unitPrice(BigDecimal.valueOf(99.99)) // Placeholder price
-                    .quantity(itemRequest.getQuantity())
+                    .productId(productId)
+                    .productName(product.getName())
+                    .unitPrice(product.getPrice())
+                    .quantity(requestedQuantity)
                     .build();
 
             item.calculateSubtotal();
@@ -66,10 +104,41 @@ public class OrderServiceImpl implements OrderService {
         // Calculate total amount
         order.calculateTotalAmount();
 
-        // Save order
+        // Save order with PENDING status
         order = orderRepository.save(order);
+        log.info("Order saved with PENDING status: orderId={}, totalAmount={}",
+                order.getId(), order.getTotalAmount());
 
-        log.info("Order created successfully: orderId={}", order.getId());
+        // Step 3: Process payment
+        try {
+            log.info("Processing payment: orderId={}, amount={}, method={}",
+                    order.getId(), order.getTotalAmount(), order.getPaymentMethod());
+
+            PaymentRequestDto paymentRequest = PaymentRequestDto.builder()
+                    .orderId(order.getId())
+                    .amount(order.getTotalAmount())
+                    .paymentMethod(order.getPaymentMethod().name())
+                    .build();
+
+            PaymentDto payment = paymentServiceClient.createPayment(paymentRequest);
+
+            // Update order with payment details and confirm
+            order.setPaymentId(payment.getId());
+            order.setTransactionId(payment.getTransactionId());
+            order.setStatus(OrderStatus.CONFIRMED);
+
+            order = orderRepository.save(order);
+
+            log.info("Payment processed successfully: orderId={}, paymentId={}, transactionId={}",
+                    order.getId(), payment.getId(), payment.getTransactionId());
+
+        } catch (Exception e) {
+            log.error("Payment failed for orderId={}: {}", order.getId(), e.getMessage());
+            // Order remains in PENDING status, payment can be retried
+            throw new RuntimeException("Payment processing failed: " + e.getMessage(), e);
+        }
+
+        log.info("Order created successfully: orderId={}, status={}", order.getId(), order.getStatus());
 
         return mapToOrderResponse(order);
     }
@@ -157,11 +226,34 @@ public class OrderServiceImpl implements OrderService {
 
             // Add new items
             for (OrderItemRequest itemRequest : request.getItems()) {
+                Long productId = itemRequest.getProductId();
+                Integer requestedQuantity = itemRequest.getQuantity();
+
+                log.debug("Validating product for update: productId={}, requestedQuantity={}",
+                        productId, requestedQuantity);
+
+                ProductDto product = productServiceClient.getProduct(productId);
+
+                if (!"AVAILABLE".equals(product.getStatus())) {
+                    log.error("Product is not available: productId={}, status={}", productId, product.getStatus());
+                    throw new RuntimeException("Product is not available: productId=" + productId +
+                            ", status=" + product.getStatus());
+                }
+
+                ProductStockDto stock = productServiceClient.getProductStock(productId);
+
+                if (stock.getAvailableQuantity() < requestedQuantity) {
+                    log.error("Insufficient stock: productId={}, requested={}, available={}",
+                            productId, requestedQuantity, stock.getAvailableQuantity());
+                    throw new RuntimeException("Insufficient stock for product: productId=" + productId +
+                            ", requested=" + requestedQuantity + ", available=" + stock.getAvailableQuantity());
+                }
+
                 OrderItem item = OrderItem.builder()
-                        .productId(itemRequest.getProductId())
-                        .productName("Product " + itemRequest.getProductId()) // Placeholder
-                        .unitPrice(BigDecimal.valueOf(99.99)) // Placeholder price
-                        .quantity(itemRequest.getQuantity())
+                        .productId(productId)
+                        .productName(product.getName())
+                        .unitPrice(product.getPrice())
+                        .quantity(requestedQuantity)
                         .build();
 
                 item.calculateSubtotal();
